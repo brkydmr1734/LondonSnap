@@ -8,10 +8,15 @@
 *.key
 *.p12
 *.p8
+*.jks
+*.keystore
 serviceAccountKey.json
 firebase-service-account.json
 google-services.json
 GoogleService-Info.plist
+
+# API keys / tokens config (contains Mapbox, etc.)
+mobile/lib/core/config/app_config.dart
 
 # ===========================
 # DEPENDENCIES
