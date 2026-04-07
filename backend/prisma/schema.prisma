@@ -1,0 +1,1097 @@
+// LondonSnaps Database Schema
+// Full production schema with all models
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ==================================================
+// USER & AUTHENTICATION
+// ==================================================
+
+model User {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  phone               String?   @unique
+  passwordHash        String?
+  username            String    @unique
+  displayName         String
+  avatarUrl           String?
+  avatarConfig        String?
+  bio                 String?
+  birthday            DateTime?
+  gender              Gender?
+  isVerified          Boolean   @default(false)
+  isAdmin             Boolean   @default(false)
+  isUniversityStudent Boolean   @default(false)
+  universityId        String?
+  course              String?
+  graduationYear      Int?
+  lastSeenAt          DateTime  @default(now())
+  isOnline            Boolean   @default(false)
+  snapScore           Int       @default(0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
+  
+  // Privacy settings
+  privacySettings     UserPrivacySettings?
+  notificationPrefs   NotificationPreferences?
+  
+  // OAuth connections
+  appleId             String?   @unique
+  googleId            String?   @unique
+  
+  // Verification
+  emailVerified       Boolean   @default(false)
+  phoneVerified       Boolean   @default(false)
+  
+  // Account status
+  status              AccountStatus @default(ACTIVE)
+  suspensionReason    String?
+  suspendedUntil      DateTime?
+  
+  // Relations
+  university          University? @relation(fields: [universityId], references: [id])
+  sessions            Session[]
+  sentFriendRequests  FriendRequest[] @relation("FriendRequestSender")
+  receivedFriendRequests FriendRequest[] @relation("FriendRequestReceiver")
+  friends             Friendship[] @relation("UserFriends")
+  friendOf            Friendship[] @relation("FriendOf")
+  blockedUsers        Block[] @relation("BlockingUser")
+  blockedBy           Block[] @relation("BlockedUser")
+  sentSnaps           Snap[] @relation("SnapSender")
+  receivedSnaps       SnapRecipient[]
+  stories             Story[]
+  storyViews          StoryView[]
+  sentMessages        Message[] @relation("MessageSender")
+  chatMemberships     ChatMember[]
+  memories            Memory[]
+  memoryAlbums        MemoryAlbum[]
+  sentStreaks         Streak[] @relation("StreakSender")
+  receivedStreaks     Streak[] @relation("StreakReceiver")
+  reports             Report[] @relation("ReportAuthor")
+  reportedReports     Report[] @relation("ReportedUser")
+  notifications       Notification[]
+  deviceTokens        DeviceToken[]
+  universityCircles   CircleMember[]
+  eventsCreated       Event[] @relation("EventCreator")
+  eventRSVPs          EventRSVP[]
+  socialMatches       SocialMatch[] @relation("MatchUser")
+  socialMatchedWith   SocialMatch[] @relation("MatchedWith")
+  locations           UserLocation[]
+  interests           UserInterest[]
+  verificationCodes   VerificationCode[]
+  storyReactions      StoryReaction[]
+  snapScreenshots     SnapScreenshot[]
+  savedSnaps          SavedSnap[]      @relation("UserSavedSnaps")
+  myEyesOnlyVault     MyEyesOnlyVault?
+  safetyWalksRequested  SafetyWalk[]         @relation("SafetyWalkRequester")
+  safetyWalksCompanion  SafetyWalk[]         @relation("SafetyWalkCompanion")
+  safetyWalkLocations   SafetyWalkLocation[]
+  safetyRatingsGiven    SafetyWalkRating[]   @relation("SafetyRater")
+  safetyRatingsReceived SafetyWalkRating[]   @relation("SafetyRated")
+  safetyScore           SafetyScore?
+  
+  @@index([username])
+  @@index([email])
+  @@index([universityId])
+  @@index([status])
+  @@index([isOnline])
+}
+
+model UserPrivacySettings {
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  whoCanMessage         PrivacyLevel @default(FRIENDS)
+  whoCanViewStory       PrivacyLevel @default(FRIENDS)
+  whoCanSeeLocation     PrivacyLevel @default(FRIENDS)
+  whoCanFindMe          PrivacyLevel @default(EVERYONE)
+  showInDiscover        Boolean  @default(true)
+  showInNearby          Boolean  @default(false)
+  showLastSeen          Boolean  @default(true)
+  showReadReceipts      Boolean  @default(true)
+  allowScreenshotNotify Boolean  @default(true)
+  
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([showInDiscover])
+  @@index([showInNearby])
+}
+
+model NotificationPreferences {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  pushEnabled         Boolean  @default(true)
+  snapNotifications   Boolean  @default(true)
+  chatNotifications   Boolean  @default(true)
+  storyNotifications  Boolean  @default(true)
+  friendNotifications Boolean  @default(true)
+  eventNotifications  Boolean  @default(true)
+  streakReminders     Boolean  @default(true)
+  marketingEmails     Boolean  @default(false)
+  quietHoursStart     String?
+  quietHoursEnd       String?
+  
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id          String   @id @default(uuid())
+  userId      String
+  token       String   @unique
+  refreshToken String  @unique
+  deviceType  DeviceType
+  deviceName  String?
+  deviceId    String?
+  ipAddress   String?
+  userAgent   String?
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  lastUsedAt  DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([token])
+  @@index([userId])
+}
+
+model VerificationCode {
+  id          String   @id @default(uuid())
+  userId      String?
+  email       String?
+  phone       String?
+  code        String
+  type        VerificationType
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime @default(now())
+  
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([code, type])
+}
+
+// ==================================================
+// UNIVERSITY & LONDON STUDENT FEATURES
+// ==================================================
+
+model University {
+  id              String   @id @default(uuid())
+  name            String   @unique
+  shortName       String
+  domain          String   @unique // e.g., "ucl.ac.uk"
+  logoUrl         String?
+  location        String?
+  latitude        Float?
+  longitude       Float?
+  isVerified      Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  
+  users           User[]
+  circles         Circle[]
+  events          Event[]
+  
+  @@index([domain])
+}
+
+model Circle {
+  id              String   @id @default(uuid())
+  name            String
+  description     String?
+  type            CircleType
+  universityId    String?
+  coverImageUrl   String?
+  isPrivate       Boolean  @default(false)
+  memberCount     Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  university      University? @relation(fields: [universityId], references: [id])
+  members         CircleMember[]
+  stories         Story[]
+  
+  @@index([universityId, type])
+}
+
+model CircleMember {
+  id          String   @id @default(uuid())
+  circleId    String
+  userId      String
+  role        CircleRole @default(MEMBER)
+  joinedAt    DateTime @default(now())
+  
+  circle      Circle   @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([circleId, userId])
+}
+
+model Event {
+  id              String   @id @default(uuid())
+  title           String
+  description     String
+  coverImageUrl   String?
+  location        String
+  latitude        Float?
+  longitude       Float?
+  area            LondonArea?
+  startTime       DateTime
+  endTime         DateTime?
+  isOnline        Boolean  @default(false)
+  onlineLink      String?
+  maxAttendees    Int?
+  creatorId       String
+  universityId    String?
+  isPublic        Boolean  @default(true)
+  status          EventStatus @default(ACTIVE)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  creator         User     @relation("EventCreator", fields: [creatorId], references: [id])
+  university      University? @relation(fields: [universityId], references: [id])
+  rsvps           EventRSVP[]
+  chat            Chat?
+  
+  @@index([startTime])
+  @@index([area])
+  @@index([universityId])
+}
+
+model EventRSVP {
+  id          String   @id @default(uuid())
+  eventId     String
+  userId      String
+  status      RSVPStatus @default(GOING)
+  createdAt   DateTime @default(now())
+  
+  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([eventId, userId])
+}
+
+model SocialMatch {
+  id              String   @id @default(uuid())
+  userId          String
+  matchedUserId   String
+  type            MatchType
+  status          MatchStatus @default(PENDING)
+  compatibility   Float?
+  message         String?
+  createdAt       DateTime @default(now())
+  respondedAt     DateTime?
+  
+  user            User     @relation("MatchUser", fields: [userId], references: [id])
+  matchedUser     User     @relation("MatchedWith", fields: [matchedUserId], references: [id])
+  
+  @@unique([userId, matchedUserId, type])
+  @@index([status])
+}
+
+model UserLocation {
+  id          String   @id @default(uuid())
+  userId      String
+  latitude    Float
+  longitude   Float
+  area        LondonArea?
+  accuracy    Float?
+  updatedAt   DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([area])
+  @@index([updatedAt])
+}
+
+model UserInterest {
+  id          String   @id @default(uuid())
+  userId      String
+  category    InterestCategory
+  name        String
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, category, name])
+}
+
+// ==================================================
+// SOCIAL GRAPH
+// ==================================================
+
+model FriendRequest {
+  id          String   @id @default(uuid())
+  senderId    String
+  receiverId  String
+  status      FriendRequestStatus @default(PENDING)
+  createdAt   DateTime @default(now())
+  respondedAt DateTime?
+  
+  sender      User     @relation("FriendRequestSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver    User     @relation("FriendRequestReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  @@unique([senderId, receiverId])
+  @@index([senderId, status])
+  @@index([receiverId, status])
+}
+
+model Friendship {
+  id          String   @id @default(uuid())
+  userId      String
+  friendId    String
+  level       FriendshipLevel @default(NORMAL)
+  createdAt   DateTime @default(now())
+  
+  user        User     @relation("UserFriends", fields: [userId], references: [id], onDelete: Cascade)
+  friend      User     @relation("FriendOf", fields: [friendId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, friendId])
+  @@index([userId])
+  @@index([friendId])
+}
+
+model Block {
+  id          String   @id @default(uuid())
+  blockerId   String
+  blockedId   String
+  reason      String?
+  createdAt   DateTime @default(now())
+  
+  blocker     User     @relation("BlockingUser", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked     User     @relation("BlockedUser", fields: [blockedId], references: [id], onDelete: Cascade)
+  
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
+
+model Streak {
+  id              String   @id @default(uuid())
+  senderId        String
+  receiverId      String
+  count           Int      @default(0)
+  lastInteraction DateTime @default(now())
+  expiresAt       DateTime
+  isActive        Boolean  @default(true)
+  longestStreak   Int      @default(0)
+  createdAt       DateTime @default(now())
+  
+  sender          User     @relation("StreakSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver        User     @relation("StreakReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  @@unique([senderId, receiverId])
+  @@index([expiresAt])
+}
+
+// ==================================================
+// SNAPS (EPHEMERAL MESSAGES)
+// ==================================================
+
+model Snap {
+  id              String   @id @default(uuid())
+  senderId        String
+  mediaUrl        String
+  mediaType       MediaType
+  thumbnailUrl    String?
+  duration        Int?     // for videos in seconds
+  hasAudio        Boolean  @default(false)
+  caption         String?
+  drawingData     Json?
+  stickers        Json?
+  filters         Json?
+  viewDuration    Int      @default(5) // seconds before auto-close
+  isReplayable    Boolean  @default(false)
+  expiresAt       DateTime // 24 hours after send
+  createdAt       DateTime @default(now())
+  
+  sender          User     @relation("SnapSender", fields: [senderId], references: [id])
+  recipients      SnapRecipient[]
+  screenshots     SnapScreenshot[]
+  savedBy         SavedSnap[]      @relation("SnapSaves")
+  
+  @@index([senderId])
+  @@index([expiresAt])
+}
+
+model SnapRecipient {
+  id          String   @id @default(uuid())
+  snapId      String
+  userId      String
+  status      SnapStatus @default(PENDING)
+  deliveredAt DateTime?
+  openedAt    DateTime?
+  replayedAt  DateTime?
+  screenshotAt DateTime?
+  replayCount Int      @default(0)
+  
+  snap        Snap     @relation(fields: [snapId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([snapId, userId])
+  @@index([snapId])
+  @@index([userId, status])
+}
+
+model SnapScreenshot {
+  id          String   @id @default(uuid())
+  snapId      String
+  userId      String
+  createdAt   DateTime @default(now())
+  
+  snap        Snap     @relation(fields: [snapId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SavedSnap {
+  id        String   @id @default(cuid())
+  userId    String
+  snapId    String
+  savedAt   DateTime @default(now())
+  
+  user      User     @relation("UserSavedSnaps", fields: [userId], references: [id], onDelete: Cascade)
+  snap      Snap     @relation("SnapSaves", fields: [snapId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, snapId])
+  @@index([userId, savedAt])
+}
+
+// ==================================================
+// STORIES
+// ==================================================
+
+model Story {
+  id              String   @id @default(uuid())
+  userId          String
+  circleId        String?
+  mediaUrl        String
+  mediaType       MediaType
+  thumbnailUrl    String?
+  duration        Int?
+  caption         String?
+  drawingData     Json?
+  stickers        Json?
+  filters         Json?
+  location        String?
+  latitude        Float?
+  longitude       Float?
+  privacy         StoryPrivacy @default(FRIENDS)
+  allowReplies    Boolean  @default(true)
+  viewCount       Int      @default(0)
+  expiresAt       DateTime // 24 hours after post
+  createdAt       DateTime @default(now())
+  
+  user            User     @relation(fields: [userId], references: [id])
+  circle          Circle?  @relation(fields: [circleId], references: [id])
+  views           StoryView[]
+  reactions       StoryReaction[]
+  replies         Message[]
+  
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([circleId])
+  @@index([createdAt])
+  @@index([userId, privacy, expiresAt])
+}
+
+model StoryView {
+  id          String   @id @default(uuid())
+  storyId     String
+  userId      String
+  viewedAt    DateTime @default(now())
+  
+  story       Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([storyId, userId])
+  @@index([userId])
+}
+
+model StoryReaction {
+  id          String   @id @default(uuid())
+  storyId     String
+  userId      String
+  emoji       String
+  createdAt   DateTime @default(now())
+  
+  story       Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([storyId, userId])
+}
+
+// ==================================================
+// CHAT & MESSAGES
+// ==================================================
+
+model Chat {
+  id              String   @id @default(uuid())
+  type            ChatType
+  name            String?
+  imageUrl        String?
+  eventId         String?  @unique
+  isDisappearing  Boolean  @default(false)
+  disappearAfter  Int?     // seconds
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  lastMessageAt   DateTime @default(now())
+  
+  event           Event?   @relation(fields: [eventId], references: [id])
+  safetyWalk      SafetyWalk?
+  members         ChatMember[]
+  messages        Message[]
+  
+  @@index([lastMessageAt])
+  @@index([type])
+}
+
+model ChatMember {
+  id              String   @id @default(uuid())
+  chatId          String
+  userId          String
+  role            ChatRole @default(MEMBER)
+  nickname        String?
+  isMuted         Boolean  @default(false)
+  mutedUntil      DateTime?
+  lastReadAt      DateTime @default(now())
+  joinedAt        DateTime @default(now())
+  leftAt          DateTime?
+  deletedAt       DateTime?  // Soft delete: chat disappears from user's list
+  
+  chat            Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([chatId, userId])
+  @@index([userId])
+  @@index([userId, role])
+}
+
+model Message {
+  id              String   @id @default(uuid())
+  chatId          String
+  senderId        String
+  storyReplyId    String?
+  type            MessageType @default(TEXT)
+  content         String?
+  mediaUrl        String?
+  mediaType       MediaType?
+  thumbnailUrl    String?
+  duration        Int?     // for voice/video
+  replyToId       String?
+  isEdited        Boolean  @default(false)
+  isDeleted       Boolean  @default(false)
+  expiresAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  chat            Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender          User     @relation("MessageSender", fields: [senderId], references: [id])
+  storyReply      Story?   @relation(fields: [storyReplyId], references: [id])
+  replyTo         Message? @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies         Message[] @relation("MessageReplies")
+  readReceipts    MessageReadReceipt[]
+  reactions       MessageReaction[]
+  
+  @@index([chatId, createdAt])
+  @@index([senderId])
+}
+
+model MessageReadReceipt {
+  id          String   @id @default(uuid())
+  messageId   String
+  userId      String
+  deliveredAt DateTime?  // Message reached recipient's device
+  readAt      DateTime?  // Message was read by recipient
+  
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  
+  @@unique([messageId, userId])
+}
+
+model MessageReaction {
+  id          String   @id @default(uuid())
+  messageId   String
+  userId      String
+  emoji       String
+  createdAt   DateTime @default(now())
+  
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+// ==================================================
+// MEMORIES
+// ==================================================
+
+model Memory {
+  id              String   @id @default(uuid())
+  userId          String
+  albumId         String?
+  mediaUrl        String
+  mediaType       MediaType
+  thumbnailUrl    String?
+  caption         String?
+  location        String?
+  latitude        Float?
+  longitude       Float?
+  originalSnapId  String?
+  originalStoryId String?
+  takenAt         DateTime @default(now())
+  createdAt       DateTime @default(now())
+  isMyEyesOnly    Boolean  @default(false)
+  encryptionKey   String?  // For future E2E encryption
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  album           MemoryAlbum? @relation(fields: [albumId], references: [id])
+  
+  @@index([userId, createdAt])
+  @@index([albumId])
+  @@index([userId, isMyEyesOnly])
+}
+
+model MemoryAlbum {
+  id          String   @id @default(uuid())
+  userId      String
+  name        String
+  coverUrl    String?
+  isPrivate   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  memories    Memory[]
+  
+  @@index([userId])
+}
+
+model MyEyesOnlyVault {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  pinHash        String    // bcrypt hashed 4-digit PIN
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("my_eyes_only_vaults")
+}
+
+// ==================================================
+// NOTIFICATIONS
+// ==================================================
+
+model Notification {
+  id          String   @id @default(uuid())
+  userId      String
+  type        NotificationType
+  title       String
+  body        String
+  imageUrl    String?
+  data        Json?
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+model DeviceToken {
+  id              String   @id @default(uuid())
+  userId          String
+  token           String   @unique
+  platform        DevicePlatform
+  snsEndpointArn  String?  // @deprecated - kept for migration compatibility, no longer used
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, platform])
+  @@index([userId])
+}
+
+// ==================================================
+// MODERATION & REPORTS
+// ==================================================
+
+model Report {
+  id              String   @id @default(uuid())
+  authorId        String
+  reportedUserId  String?
+  reportedSnapId  String?
+  reportedStoryId String?
+  reportedMessageId String?
+  reportedEventId String?
+  reason          ReportReason
+  description     String?
+  status          ReportStatus @default(PENDING)
+  reviewedBy      String?
+  reviewNotes     String?
+  resolution      ReportResolution?
+  createdAt       DateTime @default(now())
+  reviewedAt      DateTime?
+  
+  author          User     @relation("ReportAuthor", fields: [authorId], references: [id])
+  reportedUser    User?    @relation("ReportedUser", fields: [reportedUserId], references: [id])
+  
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ==================================================
+// MEDIA STORAGE
+// ==================================================
+
+model Media {
+  id              String   @id @default(uuid())
+  userId          String
+  url             String
+  type            MediaType
+  mimeType        String
+  size            Int
+  width           Int?
+  height          Int?
+  duration        Int?
+  thumbnailUrl    String?
+  blurhash        String?
+  isProcessed     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  
+  @@index([userId])
+}
+
+// ==================================================
+// ENUMS
+// ==================================================
+
+enum Gender {
+  MALE
+  FEMALE
+  NON_BINARY
+  PREFER_NOT_TO_SAY
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+  DELETED
+}
+
+enum DeviceType {
+  IOS
+  ANDROID
+  WEB
+}
+
+enum VerificationType {
+  EMAIL
+  PHONE
+  UNIVERSITY
+  PASSWORD_RESET
+}
+
+enum PrivacyLevel {
+  EVERYONE
+  FRIENDS
+  CLOSE_FRIENDS
+  NOBODY
+}
+
+enum CircleType {
+  COURSE
+  HALLS
+  SOCIETY
+  CUSTOM
+}
+
+enum CircleRole {
+  OWNER
+  ADMIN
+  MODERATOR
+  MEMBER
+}
+
+enum LondonArea {
+  SOHO
+  CAMDEN
+  SHOREDITCH
+  BRIXTON
+  HACKNEY
+  KENSINGTON
+  WESTMINSTER
+  ISLINGTON
+  GREENWICH
+  STRATFORD
+  KINGS_CROSS
+  NOTTING_HILL
+  FULHAM
+  WIMBLEDON
+  OTHER
+}
+
+enum EventStatus {
+  DRAFT
+  ACTIVE
+  CANCELLED
+  COMPLETED
+}
+
+enum RSVPStatus {
+  GOING
+  INTERESTED
+  NOT_GOING
+}
+
+enum MatchType {
+  STUDY_BUDDY
+  COFFEE
+  SOCIAL
+  NETWORKING
+}
+
+enum MatchStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+enum InterestCategory {
+  MUSIC
+  SPORTS
+  ARTS
+  TECH
+  FOOD
+  TRAVEL
+  GAMING
+  FASHION
+  PHOTOGRAPHY
+  FILM
+  READING
+  FITNESS
+  OTHER
+}
+
+enum FriendRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+enum FriendshipLevel {
+  NORMAL
+  CLOSE
+  BEST
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  AUDIO
+}
+
+enum SnapStatus {
+  PENDING
+  DELIVERED
+  OPENED
+  REPLAYED
+  EXPIRED
+}
+
+enum StoryPrivacy {
+  EVERYONE
+  FRIENDS
+  CLOSE_FRIENDS
+  CUSTOM
+}
+
+enum ChatType {
+  DIRECT
+  GROUP
+  EVENT
+  SAFETY_WALK
+}
+
+enum ChatRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  VOICE_NOTE
+  STICKER
+  GIF
+  LOCATION
+  SYSTEM
+  SNAP
+}
+
+enum NotificationType {
+  FRIEND_REQUEST
+  FRIEND_ACCEPTED
+  SNAP_RECEIVED
+  SNAP_OPENED
+  SNAP_SCREENSHOT
+  STORY_REACTION
+  STORY_REPLY
+  MESSAGE
+  STREAK_WARNING
+  STREAK_LOST
+  EVENT_INVITE
+  EVENT_REMINDER
+  MATCH_REQUEST
+  MATCH_ACCEPTED
+  SYSTEM
+  SAFETY_WALK_INVITE
+  SOS_ALERT
+  COMPANION_ARRIVED
+  WALK_COMPLETED
+}
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+}
+
+enum ReportReason {
+  SPAM
+  HARASSMENT
+  INAPPROPRIATE_CONTENT
+  IMPERSONATION
+  VIOLENCE
+  HATE_SPEECH
+  SELF_HARM
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  UNDER_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+enum ReportResolution {
+  WARNING_ISSUED
+  CONTENT_REMOVED
+  USER_SUSPENDED
+  USER_BANNED
+  NO_ACTION
+}
+
+enum SafetyWalkStatus {
+  PENDING
+  ACCEPTED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  SOS_TRIGGERED
+}
+
+enum SafetyScoreEventType {
+  WALK_COMPLETED
+  WALK_CANCELLED_LATE
+  SOS_FALSE_ALARM
+  POSITIVE_RATING
+  NEGATIVE_RATING
+  REPORT_FILED
+}
+
+// ==================================================
+// SAFETY WALK
+// ==================================================
+
+model SafetyWalk {
+  id                String            @id @default(uuid())
+  requesterId       String
+  companionId       String
+  status            SafetyWalkStatus  @default(PENDING)
+  startLat          Float
+  startLng          Float
+  endLat            Float
+  endLng            Float
+  routePolyline     Json?
+  estimatedDuration Int?
+  transportMode     String            @default("WALKING")
+  scheduledAt       DateTime?
+  startedAt         DateTime?
+  endedAt           DateTime?
+  safetyScore       Float?
+  sosTriggered      Boolean           @default(false)
+  sosTriggeredAt    DateTime?
+  sosTriggeredBy    String?
+  chatId            String?           @unique
+  chat              Chat?             @relation(fields: [chatId], references: [id])
+  requester         User              @relation("SafetyWalkRequester", fields: [requesterId], references: [id])
+  companion         User              @relation("SafetyWalkCompanion", fields: [companionId], references: [id])
+  locationUpdates   SafetyWalkLocation[]
+  ratings           SafetyWalkRating[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([requesterId, status])
+  @@index([companionId, status])
+  @@index([status, scheduledAt])
+}
+
+model SafetyWalkLocation {
+  id          String     @id @default(uuid())
+  walkId      String
+  userId      String
+  latitude    Float
+  longitude   Float
+  accuracy    Float?
+  speed       Float?
+  heading     Float?
+  timestamp   DateTime   @default(now())
+  walk        SafetyWalk @relation(fields: [walkId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id])
+
+  @@index([walkId, userId, timestamp])
+}
+
+model SafetyWalkRating {
+  id        String     @id @default(uuid())
+  walkId    String
+  raterId   String
+  ratedId   String
+  score     Int
+  comment   String?
+  createdAt DateTime   @default(now())
+  walk      SafetyWalk @relation(fields: [walkId], references: [id], onDelete: Cascade)
+  rater     User       @relation("SafetyRater", fields: [raterId], references: [id])
+  rated     User       @relation("SafetyRated", fields: [ratedId], references: [id])
+
+  @@unique([walkId, raterId])
+}
+
+model SafetyScore {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  score           Float    @default(100.0)
+  totalWalks      Int      @default(0)
+  completedWalks  Int      @default(0)
+  cancelledWalks  Int      @default(0)
+  sosCount        Int      @default(0)
+  avgRating       Float    @default(5.0)
+  lastUpdatedAt   DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id])
+}

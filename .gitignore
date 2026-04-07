@@ -1,0 +1,138 @@
+# ===========================
+# ENVIRONMENT & SECRETS
+# ===========================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.p8
+serviceAccountKey.json
+firebase-service-account.json
+google-services.json
+GoogleService-Info.plist
+
+# ===========================
+# DEPENDENCIES
+# ===========================
+**/node_modules/
+.pnp
+.pnp.js
+
+# ===========================
+# BUILD & OUTPUT
+# ===========================
+**/dist/
+**/build/
+**/.next/
+**/out/
+*.tsbuildinfo
+
+# ===========================
+# LOGS
+# ===========================
+**/logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ===========================
+# OS FILES
+# ===========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ===========================
+# IDE / EDITOR
+# ===========================
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# ===========================
+# TESTING & COVERAGE
+# ===========================
+**/coverage/
+.nyc_output
+
+# ===========================
+# BACKEND SPECIFIC
+# ===========================
+backend/logs/
+backend/dist/
+backend/node_modules/
+
+# ===========================
+# ADMIN PANEL SPECIFIC
+# ===========================
+admin/dist/
+admin/node_modules/
+
+# ===========================
+# MOBILE (Flutter) SPECIFIC
+# ===========================
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/.pub-cache/
+mobile/.pub/
+mobile/build/
+mobile/coverage/
+mobile/.idea/
+mobile/*.iml
+mobile/flutter_*.log
+mobile/flutter_*.png
+mobile/.metadata
+
+# Flutter iOS
+mobile/ios/Pods/
+mobile/ios/.symlinks/
+mobile/ios/Flutter/Flutter.framework
+mobile/ios/Flutter/Flutter.podspec
+mobile/ios/Flutter/Generated.xcconfig
+mobile/ios/Flutter/app.flx
+mobile/ios/Flutter/app.zip
+mobile/ios/Flutter/flutter_assets/
+mobile/ios/Flutter/flutter_export_environment.sh
+mobile/ios/ServiceDefinitions.json
+mobile/ios/Runner/GeneratedPluginRegistrant.*
+
+# Flutter Android
+mobile/android/.gradle/
+mobile/android/app/debug/
+mobile/android/app/profile/
+mobile/android/app/release/
+mobile/android/local.properties
+mobile/android/key.properties
+mobile/android/*.jks
+mobile/android/*.keystore
+
+# ===========================
+# DOCKER
+# ===========================
+docker-compose.override.yml
+
+# ===========================
+# MISC
+# ===========================
+*.cache
+*.tmp
+*.temp
+.cache/
+.tmp/
+**/.tmp/
+.temp/
+**/.build/
+# package-lock.json
+pubspec.lock

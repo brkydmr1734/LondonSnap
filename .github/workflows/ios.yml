@@ -1,0 +1,193 @@
+name: iOS CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'ios/**'
+
+env:
+  XCODE_VERSION: '15.2'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: ./ios
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install SwiftLint
+        run: brew install swiftlint
+        
+      - name: Run SwiftLint
+        run: swiftlint lint --reporter github-actions-logging
+
+  build:
+    name: Build
+    runs-on: macos-14
+    needs: lint
+    defaults:
+      run:
+        working-directory: ./ios
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app
+        
+      - name: Cache Swift Package Manager
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+            
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project LondonSnaps.xcodeproj -scheme LondonSnaps
+        
+      - name: Build for testing
+        run: |
+          xcodebuild build-for-testing \
+            -project LondonSnaps.xcodeproj \
+            -scheme LondonSnaps \
+            -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=17.2' \
+            -configuration Debug \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
+
+  test:
+    name: Test
+    runs-on: macos-14
+    needs: build
+    defaults:
+      run:
+        working-directory: ./ios
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app
+        
+      - name: Cache Swift Package Manager
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/Developer/Xcode/DerivedData
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+            
+      - name: Run tests
+        run: |
+          xcodebuild test \
+            -project LondonSnaps.xcodeproj \
+            -scheme LondonSnaps \
+            -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=17.2' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
+            
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-test-results
+          path: ios/TestResults.xcresult
+
+  archive:
+    name: Archive
+    runs-on: macos-14
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: ./ios
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app
+        
+      - name: Install Apple certificate
+        env:
+          P12_CERTIFICATE: ${{ secrets.IOS_P12_CERTIFICATE }}
+          P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          
+          echo -n "$P12_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+          
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          
+      - name: Install provisioning profile
+        env:
+          PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          PP_PATH=$RUNNER_TEMP/profile.mobileprovision
+          echo -n "$PROVISIONING_PROFILE" | base64 --decode -o $PP_PATH
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+          
+      - name: Archive app
+        run: |
+          xcodebuild archive \
+            -project LondonSnaps.xcodeproj \
+            -scheme LondonSnaps \
+            -archivePath $RUNNER_TEMP/LondonSnaps.xcarchive \
+            -configuration Release
+            
+      - name: Export IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/LondonSnaps.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath $RUNNER_TEMP/export
+            
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+
+  deploy-testflight:
+    name: Deploy to TestFlight
+    runs-on: macos-14
+    needs: archive
+    if: github.ref == 'refs/heads/main'
+    environment: ios-testflight
+    steps:
+      - name: Download IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-ipa
+          path: ./
+          
+      - name: Upload to TestFlight
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: |
+          xcrun altool --upload-app -f *.ipa \
+            --apiKey $APP_STORE_CONNECT_API_KEY_ID \
+            --apiIssuer $APP_STORE_CONNECT_API_ISSUER_ID \
+            --type ios

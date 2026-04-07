@@ -1,0 +1,226 @@
+name: Android CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'android/**'
+
+env:
+  JAVA_VERSION: '17'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./android
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: gradle
+          
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+        
+      - name: Run ktlint
+        run: ./gradlew ktlintCheck
+        
+      - name: Run Android Lint
+        run: ./gradlew lint
+        
+      - name: Upload lint reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-lint-reports
+          path: |
+            android/app/build/reports/lint-results*.html
+            android/app/build/reports/ktlint/**
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: lint
+    defaults:
+      run:
+        working-directory: ./android
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: gradle
+          
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+        
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+        
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: build
+    defaults:
+      run:
+        working-directory: ./android
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: gradle
+          
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+        
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest
+        
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-test-reports
+          path: android/app/build/reports/tests/
+
+  instrumented-tests:
+    name: Instrumented Tests
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: gradle
+          
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+        working-directory: .
+        
+      - name: Run instrumented tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          working-directory: ./android
+          script: ./gradlew connectedDebugAndroidTest
+          
+      - name: Upload instrumented test reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-instrumented-test-reports
+          path: android/app/build/reports/androidTests/
+
+  release:
+    name: Build Release
+    runs-on: ubuntu-latest
+    needs: instrumented-tests
+    if: github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: ./android
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: gradle
+          
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+        
+      - name: Decode Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo $KEYSTORE_BASE64 | base64 --decode > app/release.keystore
+          
+      - name: Build Release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+        
+      - name: Build Release Bundle
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
+        
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          
+      - name: Upload Release Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-bundle
+          path: android/app/build/outputs/bundle/release/*.aab
+
+  deploy-play-store:
+    name: Deploy to Play Store
+    runs-on: ubuntu-latest
+    needs: release
+    if: github.ref == 'refs/heads/main'
+    environment: android-play-store
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Release Bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: android-release-bundle
+          path: ./
+          
+      - name: Upload to Play Store
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.londonsnaps.app
+          releaseFiles: '*.aab'
+          track: internal
+          status: draft
