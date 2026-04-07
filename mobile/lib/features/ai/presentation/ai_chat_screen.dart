@@ -116,7 +116,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
           const Padding(
             padding: EdgeInsets.only(bottom: 4),
             child: Text(
-              'Powered by LondonSnap AI',
+              'Powered by Gemini AI',
               style: TextStyle(fontSize: 10, color: AppTheme.textMuted),
             ),
           ),

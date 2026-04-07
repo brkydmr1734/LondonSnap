@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@google/generative-ai": "^0.24.1",
     "@prisma/client": "^6.19.2",
     "@sendgrid/mail": "^8.1.6",
     "@supabase/supabase-js": "^2.49.1",
