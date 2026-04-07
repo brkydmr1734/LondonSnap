@@ -428,6 +428,10 @@ class ApiService {
     return _dio.put('/chats/$chatId', data: data);
   }
 
+  Future<Response> updateChatBackground(String chatId, {String? backgroundUrl}) async {
+    return _dio.put('/chats/$chatId/background', data: {'backgroundUrl': backgroundUrl});
+  }
+
   // ── Social / Friends ──
   Future<Response> getFriends() async {
     return _dio.get('/social/friends');

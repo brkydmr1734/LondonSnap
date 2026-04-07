@@ -26,6 +26,7 @@ class SocketEvents {
   static const String userOffline = 'user_offline';
   static const String error = 'error';
   static const String snapStatusUpdate = 'snap_status_update';
+  static const String backgroundChanged = 'background_changed';
 
   // Call events - Client -> Server
   static const String callInitiate = 'call_initiate';
@@ -216,6 +217,7 @@ enum SocketEventType {
   userOnline,
   userOffline,
   snapStatusUpdate,
+  backgroundChanged,
   error,
   // Call events
   callInitiated,
@@ -425,6 +427,19 @@ class ChatSocketService extends ChangeNotifier {
         _eventController.add(SocketEvent(
           SocketEventType.messageExpired,
           {'chatId': chatId, 'messageIds': messageIds},
+        ));
+      }
+    });
+
+    // Background changed
+    _socket!.on(SocketEvents.backgroundChanged, (data) {
+      if (AppConfig.isDev) debugPrint('[SOCKET] Background changed: $data');
+      final chatId = data['chatId'] as String?;
+      final backgroundUrl = data['backgroundUrl'] as String?;
+      if (chatId != null) {
+        _eventController.add(SocketEvent(
+          SocketEventType.backgroundChanged,
+          {'chatId': chatId, 'backgroundUrl': backgroundUrl},
         ));
       }
     });

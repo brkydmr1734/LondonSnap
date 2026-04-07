@@ -908,6 +908,13 @@ class WebSocketService {
   }
 
   /**
+   * Emit background changed (called from controller)
+   */
+  emitBackgroundChanged(chatId: string, backgroundUrl: string | null): void {
+    this.emitToChat(chatId, 'background_changed', { chatId, backgroundUrl });
+  }
+
+  /**
    * Emit message delivered notification (called from HTTP endpoint)
    * Notifies the sender(s) that their messages have been delivered to a recipient
    */

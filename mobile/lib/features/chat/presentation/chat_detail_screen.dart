@@ -17,6 +17,8 @@ import 'package:londonsnaps/features/chat/models/chat_models.dart';
 import 'package:londonsnaps/features/chat/providers/chat_provider.dart';
 import 'package:londonsnaps/features/auth/providers/auth_provider.dart';
 import 'package:londonsnaps/features/calls/providers/call_provider.dart';
+import 'package:londonsnaps/features/memories/providers/memory_provider.dart';
+import 'package:londonsnaps/features/memories/models/memory_models.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:intl/intl.dart';
 
@@ -355,12 +357,25 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     return Scaffold(
       backgroundColor: _SnapColors.background,
       appBar: _buildAppBar(chat, otherParticipants, isOnline, typingText, userId),
-      body: Column(
+      body: Stack(
         children: [
-          if (chat?.isDisappearing == true) _buildDisappearingBanner(),
-          Expanded(child: _buildMessageList(userId, typingText)),
-          if (_replyingTo != null) _buildReplyPreview(),
-          _buildInputArea(),
+          if (chat?.backgroundUrl != null)
+            Positioned.fill(
+              child: CachedNetworkImage(
+                imageUrl: chat!.backgroundUrl!,
+                fit: BoxFit.cover,
+                color: Colors.black.withValues(alpha: 0.3),
+                colorBlendMode: BlendMode.darken,
+              ),
+            ),
+          Column(
+            children: [
+              if (chat?.isDisappearing == true) _buildDisappearingBanner(),
+              Expanded(child: _buildMessageList(userId, typingText)),
+              if (_replyingTo != null) _buildReplyPreview(),
+              _buildInputArea(),
+            ],
+          ),
         ],
       ),
     );
@@ -910,22 +925,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             ),
           ),
           const SizedBox(width: 8),
-          // Game controller button
+          // Chat background button
           GestureDetector(
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Coming Soon'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            },
-            child: const Padding(
-              padding: EdgeInsets.only(bottom: 8),
+            onTap: _showBackgroundPicker,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 8),
               child: Icon(
-                Icons.videogame_asset_outlined,
+                Icons.wallpaper_outlined,
                 size: 28,
-                color: Color(0xFF8E8E93),
+                color: _currentChat?.backgroundUrl != null
+                    ? _SnapColors.ownBubble
+                    : const Color(0xFF8E8E93),
               ),
             ),
           ),
@@ -1195,6 +1205,36 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             ),
             const SizedBox(height: 24),
           ],
+        ),
+      ),
+    );
+  }
+
+  void _showBackgroundPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _SnapColors.otherBubble,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (_, scrollCtrl) => _BackgroundPickerSheet(
+          scrollController: scrollCtrl,
+          chatId: widget.chatId,
+          currentBackgroundUrl: _currentChat?.backgroundUrl,
+          onApply: (url) {
+            Navigator.pop(ctx);
+            _chatProvider.updateChatBackground(widget.chatId, backgroundUrl: url);
+          },
+          onRemove: () {
+            Navigator.pop(ctx);
+            _chatProvider.updateChatBackground(widget.chatId, backgroundUrl: null);
+          },
         ),
       ),
     );
@@ -2423,6 +2463,239 @@ class _AudioMessagePlayerState extends State<_AudioMessagePlayer> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Background picker sheet that loads memories/snap gallery
+class _BackgroundPickerSheet extends StatefulWidget {
+  final ScrollController scrollController;
+  final String chatId;
+  final String? currentBackgroundUrl;
+  final void Function(String url) onApply;
+  final VoidCallback onRemove;
+
+  const _BackgroundPickerSheet({
+    required this.scrollController,
+    required this.chatId,
+    this.currentBackgroundUrl,
+    required this.onApply,
+    required this.onRemove,
+  });
+
+  @override
+  State<_BackgroundPickerSheet> createState() => _BackgroundPickerSheetState();
+}
+
+class _BackgroundPickerSheetState extends State<_BackgroundPickerSheet> {
+  final MemoryProvider _memoryProvider = MemoryProvider();
+  bool _loading = true;
+  List<Memory> _memories = [];
+  String? _selectedUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedUrl = widget.currentBackgroundUrl;
+    _loadMemories();
+  }
+
+  Future<void> _loadMemories() async {
+    await _memoryProvider.loadMemories(refresh: true);
+    if (mounted) {
+      setState(() {
+        _memories = _memoryProvider.memories
+            .where((m) => m.isImage && !m.isMyEyesOnly)
+            .toList();
+        _loading = false;
+      });
+    }
+  }
+
+  bool get _hasChanges => _selectedUrl != widget.currentBackgroundUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        const SizedBox(height: 8),
+        Container(
+          width: 40, height: 4,
+          decoration: BoxDecoration(
+            color: _SnapColors.textMuted,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Icon(Icons.wallpaper_outlined, size: 36, color: _SnapColors.ownBubble),
+        const SizedBox(height: 8),
+        const Text(
+          'Chat Background',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _SnapColors.textPrimary),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Tap to select, then apply',
+          style: TextStyle(fontSize: 13, color: _SnapColors.textMuted),
+        ),
+        const SizedBox(height: 12),
+        // Action buttons row
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              // Remove button
+              if (widget.currentBackgroundUrl != null)
+                Expanded(
+                  child: GestureDetector(
+                    onTap: widget.onRemove,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _SnapColors.divider,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.delete_outline, size: 18, color: AppTheme.errorColor),
+                          SizedBox(width: 6),
+                          Text('Remove', style: TextStyle(color: AppTheme.errorColor, fontWeight: FontWeight.w600, fontSize: 14)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              if (widget.currentBackgroundUrl != null) const SizedBox(width: 10),
+              // Apply button
+              Expanded(
+                child: GestureDetector(
+                  onTap: _hasChanges && _selectedUrl != null
+                      ? () => widget.onApply(_selectedUrl!)
+                      : null,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _hasChanges && _selectedUrl != null
+                          ? _SnapColors.ownBubble
+                          : _SnapColors.divider,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.check_circle_outline, size: 18,
+                          color: _hasChanges && _selectedUrl != null
+                              ? Colors.white
+                              : _SnapColors.textMuted),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Apply Background',
+                          style: TextStyle(
+                            color: _hasChanges && _selectedUrl != null
+                                ? Colors.white
+                                : _SnapColors.textMuted,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Memory grid
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator(color: _SnapColors.ownBubble))
+              : _memories.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.photo_library_outlined, size: 48,
+                              color: _SnapColors.textMuted.withValues(alpha: 0.5)),
+                          const SizedBox(height: 12),
+                          const Text('No memories yet',
+                              style: TextStyle(color: _SnapColors.textMuted, fontSize: 16)),
+                          const SizedBox(height: 4),
+                          const Text('Save some snaps to use as backgrounds',
+                              style: TextStyle(color: _SnapColors.textMuted, fontSize: 13)),
+                        ],
+                      ),
+                    )
+                  : GridView.builder(
+                      controller: widget.scrollController,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        mainAxisSpacing: 3,
+                        crossAxisSpacing: 3,
+                        childAspectRatio: 0.56,
+                      ),
+                      itemCount: _memories.length,
+                      itemBuilder: (context, index) {
+                        final memory = _memories[index];
+                        final isSelected = _selectedUrl == memory.mediaUrl;
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() => _selectedUrl = memory.mediaUrl);
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isSelected ? _SnapColors.ownBubble : Colors.transparent,
+                                width: 3,
+                              ),
+                            ),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(7),
+                                  child: CachedNetworkImage(
+                                    imageUrl: memory.thumbnailUrl ?? memory.mediaUrl,
+                                    fit: BoxFit.cover,
+                                    placeholder: (_, __) => Container(
+                                      color: _SnapColors.divider,
+                                      child: const Center(
+                                        child: SizedBox(width: 20, height: 20,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: _SnapColors.textMuted)),
+                                      ),
+                                    ),
+                                    errorWidget: (_, __, ___) => Container(
+                                      color: _SnapColors.divider,
+                                      child: const Icon(Icons.broken_image, color: _SnapColors.textMuted),
+                                    ),
+                                  ),
+                                ),
+                                if (isSelected)
+                                  Positioned(
+                                    top: 6, right: 6,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(2),
+                                      decoration: const BoxDecoration(
+                                        color: _SnapColors.ownBubble,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(Icons.check, color: Colors.white, size: 16),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+        ),
+      ],
     );
   }
 }

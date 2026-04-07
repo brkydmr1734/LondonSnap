@@ -152,8 +152,8 @@ export const initializeJobs = () => {
     }
   });
 
-  // Delete expired messages (disappearing messages) - runs every 15 minutes
-  cron.schedule('*/15 * * * *', async () => {
+  // Delete expired messages (disappearing messages) - runs every minute
+  cron.schedule('* * * * *', async () => {
     try {
       // First, find affected chat IDs before deletion
       const expiredMessages = await prisma.message.findMany({

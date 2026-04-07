@@ -52,6 +52,7 @@ class Chat {
   final bool isPinned;
   final bool isDisappearing;
   final int? disappearAfter;
+  final String? backgroundUrl;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -59,7 +60,7 @@ class Chat {
     required this.id, required this.type, this.name, this.imageUrl,
     required this.participants, this.lastMessage,
     this.unreadCount = 0, this.isMuted = false, this.isPinned = false,
-    this.isDisappearing = false, this.disappearAfter,
+    this.isDisappearing = false, this.disappearAfter, this.backgroundUrl,
     required this.createdAt, required this.updatedAt,
   });
 
@@ -80,6 +81,7 @@ class Chat {
       isPinned: json['isPinned'] ?? false,
       isDisappearing: json['isDisappearing'] ?? false,
       disappearAfter: json['disappearAfter'],
+      backgroundUrl: json['backgroundUrl'] as String?,
       createdAt: DateTime.parse(json['createdAt']),
       updatedAt: DateTime.parse(json['updatedAt'] ?? json['lastMessageAt'] ?? json['createdAt']),
     );
@@ -93,6 +95,18 @@ class Chat {
       unreadCount: unreadCount, isMuted: isMuted, isPinned: isPinned,
       isDisappearing: isDisappearing ?? this.isDisappearing,
       disappearAfter: clearDisappearAfter ? null : (disappearAfter ?? this.disappearAfter),
+      backgroundUrl: backgroundUrl,
+      createdAt: createdAt, updatedAt: updatedAt,
+    );
+  }
+
+  Chat copyWithBackground(String? newBackgroundUrl) {
+    return Chat(
+      id: id, type: type, name: name, imageUrl: imageUrl,
+      participants: participants, lastMessage: lastMessage,
+      unreadCount: unreadCount, isMuted: isMuted, isPinned: isPinned,
+      isDisappearing: isDisappearing, disappearAfter: disappearAfter,
+      backgroundUrl: newBackgroundUrl,
       createdAt: createdAt, updatedAt: updatedAt,
     );
   }

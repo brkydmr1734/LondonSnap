@@ -40,10 +40,16 @@ class ChatProvider extends ChangeNotifier {
   // Subscriptions
   StreamSubscription? _pollSubscription;
   StreamSubscription? _socketSubscription;
+  Timer? _expirationTimer;
 
   // ===== Getters =====
   List<Chat> get chats => List.unmodifiable(_chats);
-  List<Message> get messages => List.unmodifiable(_messages);
+  List<Message> get messages {
+    final now = DateTime.now();
+    return List.unmodifiable(
+      _messages.where((m) => m.expiresAt == null || m.expiresAt!.isAfter(now)).toList(),
+    );
+  }
   bool get isLoading => _isLoading;
   String? get error => _error;
   bool get hasMoreMessages => _hasMoreMessages;
@@ -60,6 +66,7 @@ class ChatProvider extends ChangeNotifier {
     _pollSubscription = _polling.events.listen(_handlePollEvent);
     _socketSubscription = _socket.events.listen(_handleSocketEvent);
     _socket.addListener(_onSocketUpdate);
+    _startExpirationTimer();
     
     // Set up delivery callback from socket service
     _socket.onMessageDelivered = _handleMessageDelivered;
@@ -92,6 +99,7 @@ class ChatProvider extends ChangeNotifier {
   void disconnectWebSocket() {
     _socket.disconnect();
     _polling.stopPolling();
+    _expirationTimer?.cancel();
   }
 
   /// Try to reconnect socket if disconnected
@@ -143,6 +151,11 @@ class ChatProvider extends ChangeNotifier {
       case SocketEventType.messageExpired:
         final data = event.data as Map<String, dynamic>;
         _handleMessagesExpired(data['chatId'], data['messageIds'] as List<String>);
+        break;
+
+      case SocketEventType.backgroundChanged:
+        final bgData = event.data as Map<String, dynamic>;
+        _handleBackgroundChanged(bgData['chatId'] as String, bgData['backgroundUrl'] as String?);
         break;
 
       case SocketEventType.typingStarted:
@@ -285,6 +298,7 @@ class ChatProvider extends ChangeNotifier {
         isPinned: chat.isPinned,
         isDisappearing: chat.isDisappearing,
         disappearAfter: chat.disappearAfter,
+        backgroundUrl: chat.backgroundUrl,
         createdAt: chat.createdAt,
         updatedAt: DateTime.now(),
       );
@@ -417,6 +431,7 @@ class ChatProvider extends ChangeNotifier {
           isPinned: chat.isPinned,
           isDisappearing: chat.isDisappearing,
           disappearAfter: chat.disappearAfter,
+          backgroundUrl: chat.backgroundUrl,
           createdAt: chat.createdAt,
           updatedAt: chat.updatedAt,
         );
@@ -439,6 +454,31 @@ class ChatProvider extends ChangeNotifier {
   void _handleMessagesExpired(String chatId, List<String> messageIds) {
     if (chatId == _activeChatId) {
       _messages.removeWhere((m) => messageIds.contains(m.id));
+      notifyListeners();
+    }
+  }
+
+  void _handleBackgroundChanged(String chatId, String? backgroundUrl) {
+    final idx = _chats.indexWhere((c) => c.id == chatId);
+    if (idx != -1) {
+      _chats[idx] = _chats[idx].copyWithBackground(backgroundUrl);
+      notifyListeners();
+    }
+  }
+
+  /// Periodically check and remove locally expired messages
+  void _startExpirationTimer() {
+    _expirationTimer?.cancel();
+    _expirationTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _removeLocallyExpiredMessages();
+    });
+  }
+
+  void _removeLocallyExpiredMessages() {
+    final now = DateTime.now();
+    final before = _messages.length;
+    _messages.removeWhere((m) => m.expiresAt != null && m.expiresAt!.isBefore(now));
+    if (_messages.length != before) {
       notifyListeners();
     }
   }
@@ -485,6 +525,7 @@ class ChatProvider extends ChangeNotifier {
             isPinned: chat.isPinned,
             isDisappearing: chat.isDisappearing,
             disappearAfter: chat.disappearAfter,
+            backgroundUrl: chat.backgroundUrl,
             createdAt: chat.createdAt,
             updatedAt: chat.updatedAt,
           );
@@ -942,6 +983,22 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  /// Update chat background image (per-user)
+  Future<void> updateChatBackground(String chatId, {String? backgroundUrl}) async {
+    try {
+      await _api.updateChatBackground(chatId, backgroundUrl: backgroundUrl);
+      final idx = _chats.indexWhere((c) => c.id == chatId);
+      if (idx != -1) {
+        _chats[idx] = _chats[idx].copyWithBackground(backgroundUrl);
+        notifyListeners();
+      }
+    } catch (e) {
+      final ex = e is AppException ? e : ErrorHandler.handle(e);
+      _error = ex.message;
+      notifyListeners();
+    }
+  }
+
   /// Call when leaving a chat screen to stop polling.
   void deactivateChat() {
     if (_activeChatId != null) {
@@ -962,6 +1019,7 @@ class ChatProvider extends ChangeNotifier {
   void dispose() {
     _pollSubscription?.cancel();
     _socketSubscription?.cancel();
+    _expirationTimer?.cancel();
     _socket.removeListener(_onSocketUpdate);
     _polling.dispose();
     

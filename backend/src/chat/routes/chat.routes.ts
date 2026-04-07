@@ -34,6 +34,9 @@ router.post('/:chatId/messages/:messageId/react', chatController.reactToMessage)
 // Get or create direct chat
 router.post('/direct/:userId', chatController.getOrCreateDirectChat);
 
+// Update chat background (per-user) — MUST be before generic /:chatId
+router.put('/:chatId/background', chatController.updateChatBackground);
+
 // Update chat settings
 router.put('/:chatId', chatController.updateChat);
 

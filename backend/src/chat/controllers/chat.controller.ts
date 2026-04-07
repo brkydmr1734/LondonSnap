@@ -117,12 +117,14 @@ export class ChatController {
         unreadCountMap.set(row.chatId, Number(row.count));
       }
 
-      const formattedChats = chats.map(chat => ({
-        ...chat,
-        otherMembers: chat.members.filter(m => m.userId !== req.user!.id),
-        lastMessage: chat.messages[0],
-        unreadCount: unreadCountMap.get(chat.id) || 0,
-      }));
+      const formattedChats = chats.map(chat => {
+        return {
+          ...chat,
+          otherMembers: chat.members.filter(m => m.userId !== req.user!.id),
+          lastMessage: chat.messages[0],
+          unreadCount: unreadCountMap.get(chat.id) || 0,
+        };
+      });
 
       res.json({ success: true, data: { chats: formattedChats } });
     } catch (error) {
@@ -450,6 +452,32 @@ export class ChatController {
       });
 
       res.json({ success: true, data: { action, emoji } });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Update chat background (shared for all members)
+  async updateChatBackground(req: Request, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) throw new BadRequestError('Auth required');
+      const { chatId } = req.params;
+      const { backgroundUrl } = req.body;
+
+      const member = await prisma.chatMember.findUnique({
+        where: { chatId_userId: { chatId, userId: req.user.id } },
+      });
+      if (!member || member.leftAt) throw new ForbiddenError('Not a member');
+
+      await prisma.chat.update({
+        where: { id: chatId },
+        data: { backgroundUrl: backgroundUrl ?? null },
+      });
+
+      // Notify all members in the chat via WebSocket
+      websocketService.emitBackgroundChanged(chatId, backgroundUrl ?? null);
+
+      res.json({ success: true, data: { backgroundUrl: backgroundUrl ?? null } });
     } catch (error) {
       next(error);
     }
