@@ -1,9 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 import { logger } from '../../common/utils/logger';
 
-// Initialize Gemini
+// Initialize AI providers
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
 
 const SYSTEM_PROMPT = `You are LondonSnap AI — a fun, knowledgeable, and friendly assistant built into the LondonSnap app, a social platform for university students in London.
 
@@ -153,9 +155,78 @@ function checkBlockedContent(message: string): string | null {
 }
 
 // Store conversation history per user (in-memory, resets on restart)
-const conversationHistory = new Map<string, Array<{ role: string; parts: Array<{ text: string }> }>>();
+const geminiHistory = new Map<string, Array<{ role: string; parts: Array<{ text: string }> }>>();
+const groqHistory = new Map<string, Array<{ role: 'user' | 'assistant'; content: string }>>();
 
 const MAX_HISTORY = 20;
+
+// Track which provider to use — Gemini first, Groq as fallback
+let useGroqFallback = false;
+let groqFallbackUntil = 0;
+
+function parseSuggestions(text: string): { clean: string; suggestions: string[] } {
+  let clean = text;
+  let suggestions: string[] = ['Best restaurants', "What's on tonight", 'Study cafes'];
+  const match = text.match(/\[SUGGESTIONS\]:\s*\[([^\]]+)\]/);
+  if (match) {
+    try {
+      suggestions = JSON.parse(`[${match[1]}]`);
+      clean = text.replace(/\n?\[SUGGESTIONS\]:\s*\[([^\]]+)\]/, '').trim();
+    } catch { /* keep defaults */ }
+  }
+  return { clean, suggestions };
+}
+
+async function callGemini(message: string, historyKey: string): Promise<{ response: string; suggestions: string[] }> {
+  if (!geminiHistory.has(historyKey)) geminiHistory.set(historyKey, []);
+  const history = geminiHistory.get(historyKey)!;
+
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.0-flash',
+    systemInstruction: SYSTEM_PROMPT,
+  });
+  const chat = model.startChat({ history });
+  const result = await chat.sendMessage(message);
+  const responseText = result.response.text();
+
+  history.push(
+    { role: 'user', parts: [{ text: message }] },
+    { role: 'model', parts: [{ text: responseText }] }
+  );
+  if (history.length > MAX_HISTORY * 2) history.splice(0, history.length - MAX_HISTORY * 2);
+
+  const parsed = parseSuggestions(responseText);
+  return { response: parsed.clean, suggestions: parsed.suggestions };
+}
+
+async function callGroq(message: string, historyKey: string): Promise<{ response: string; suggestions: string[] }> {
+  if (!groqHistory.has(historyKey)) groqHistory.set(historyKey, []);
+  const history = groqHistory.get(historyKey)!;
+
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history,
+    { role: 'user', content: message },
+  ];
+
+  const completion = await groq.chat.completions.create({
+    model: 'llama-3.3-70b-versatile',
+    messages,
+    max_tokens: 1024,
+    temperature: 0.7,
+  });
+
+  const responseText = completion.choices[0]?.message?.content || '';
+
+  history.push(
+    { role: 'user', content: message },
+    { role: 'assistant', content: responseText }
+  );
+  if (history.length > MAX_HISTORY * 2) history.splice(0, history.length - MAX_HISTORY * 2);
+
+  const parsed = parseSuggestions(responseText);
+  return { response: parsed.clean, suggestions: parsed.suggestions };
+}
 
 export const chatWithAI = async (
   req: Request,
@@ -195,83 +266,51 @@ export const chatWithAI = async (
       });
     }
 
-    if (!process.env.GEMINI_API_KEY) {
-      logger.error('GEMINI_API_KEY is not configured');
-      return res.status(500).json({
-        success: false,
-        error: 'AI service is not configured',
-      });
-    }
-
-    // Get or create conversation history for this user
     const historyKey = userId || 'anonymous';
-    if (!conversationHistory.has(historyKey)) {
-      conversationHistory.set(historyKey, []);
+    let result: { response: string; suggestions: string[] };
+
+    // Check if Groq fallback cooldown has expired
+    if (useGroqFallback && Date.now() > groqFallbackUntil) {
+      useGroqFallback = false;
+      logger.info('Gemini cooldown expired, switching back to primary');
     }
-    const history = conversationHistory.get(historyKey)!;
 
-    // Initialize Gemini model with system instruction
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash',
-      systemInstruction: SYSTEM_PROMPT,
-    });
-
-    // Start chat with history
-    const chat = model.startChat({ history });
-
-    // Send message and get response
-    const result = await chat.sendMessage(message);
-    const responseText = result.response.text();
-
-    // Parse suggestions from response
-    let aiResponse = responseText;
-    let suggestions: string[] = ['Best restaurants', "What's on tonight", 'Study cafes'];
-
-    const suggestionsMatch = responseText.match(/\[SUGGESTIONS\]:\s*\[([^\]]+)\]/);
-    if (suggestionsMatch) {
+    // Try Gemini first, fallback to Groq
+    if (!useGroqFallback && process.env.GEMINI_API_KEY) {
       try {
-        suggestions = JSON.parse(`[${suggestionsMatch[1]}]`);
-        aiResponse = responseText.replace(/\n?\[SUGGESTIONS\]:\s*\[([^\]]+)\]/, '').trim();
-      } catch {
-        // Keep defaults if parsing fails
+        result = await callGemini(message, historyKey);
+        logger.debug('Response served by Gemini');
+      } catch (geminiError: any) {
+        logger.warn(`Gemini failed (${geminiError?.status || 'unknown'}), falling back to Groq`);
+        // Switch to Groq for 2 minutes
+        useGroqFallback = true;
+        groqFallbackUntil = Date.now() + 2 * 60 * 1000;
+
+        if (process.env.GROQ_API_KEY) {
+          result = await callGroq(message, historyKey);
+          logger.debug('Response served by Groq (fallback)');
+        } else {
+          throw geminiError;
+        }
       }
-    }
-
-    // Update conversation history
-    history.push(
-      { role: 'user', parts: [{ text: message }] },
-      { role: 'model', parts: [{ text: responseText }] }
-    );
-
-    // Trim history if too long
-    if (history.length > MAX_HISTORY * 2) {
-      history.splice(0, history.length - MAX_HISTORY * 2);
+    } else if (process.env.GROQ_API_KEY) {
+      result = await callGroq(message, historyKey);
+      logger.debug('Response served by Groq');
+    } else {
+      return res.status(500).json({ success: false, error: 'AI service is not configured' });
     }
 
     res.json({
       success: true,
-      data: {
-        response: aiResponse,
-        suggestions,
-      },
+      data: result,
     });
   } catch (error: any) {
-    logger.error('Gemini AI error:', error);
-
-    if (error?.status === 429) {
-      return res.json({
-        success: true,
-        data: {
-          response: "I'm getting a lot of questions right now! Give me a moment and try again. 😅",
-          suggestions: ['Try again', 'Best restaurants', 'Study spots'],
-        },
-      });
-    }
+    logger.error('AI error (both providers failed):', error);
 
     res.json({
       success: true,
       data: {
-        response: "Sorry, I'm having a quick brain freeze! 🧊 Try asking me again.",
+        response: "Sorry, I'm having a quick brain freeze! 🧊 Try asking me again in a moment.",
         suggestions: ['Best restaurants', "What's on tonight", 'Study cafes'],
       },
     });
