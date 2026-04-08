@@ -321,7 +321,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           await Future.delayed(const Duration(milliseconds: 100));
           return !_chatProvider.isSocketConnected;
         }).then((_) => true),
-        Future.delayed(const Duration(seconds: 3), () => false),
+        Future.delayed(const Duration(seconds: 5), () => false),
       ]);
       if (!mounted) return;
       if (!connected) {

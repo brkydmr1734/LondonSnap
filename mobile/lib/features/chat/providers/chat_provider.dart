@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:londonsnaps/core/api/api_service.dart';
 import 'package:londonsnaps/core/config/app_config.dart';
+import 'package:londonsnaps/features/calls/providers/call_provider.dart';
 import 'package:londonsnaps/core/errors/app_exceptions.dart';
 import 'package:londonsnaps/core/errors/error_handler.dart';
 import 'package:londonsnaps/features/chat/models/chat_models.dart';
@@ -71,8 +72,8 @@ class ChatProvider extends ChangeNotifier {
     // Set up delivery callback from socket service
     _socket.onMessageDelivered = _handleMessageDelivered;
     
-    // Call system disabled - Coming Soon
-    // CallProvider().init();
+    // Initialize call system
+    CallProvider().init();
     
     // Connect WebSocket with stored token
     _connectWebSocket();
