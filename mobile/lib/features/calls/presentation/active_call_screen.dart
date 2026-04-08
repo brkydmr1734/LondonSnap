@@ -3,6 +3,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:londonsnaps/core/theme/app_theme.dart';
 import 'package:londonsnaps/features/calls/providers/call_provider.dart';
+import 'package:londonsnaps/features/calls/services/webrtc_service.dart';
 import 'package:londonsnaps/shared/widgets/avatar_widget.dart';
 
 /// Active call screen for voice and video calls
@@ -262,6 +263,31 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
     );
   }
 
+  Widget _buildQualityIndicator() {
+    final quality = _callProvider.connectionQuality;
+    Color color;
+    IconData icon;
+    switch (quality) {
+      case ConnectionQuality.excellent:
+        color = Colors.green;
+        icon = Icons.signal_cellular_4_bar;
+        break;
+      case ConnectionQuality.good:
+        color = Colors.orange;
+        icon = Icons.signal_cellular_alt_2_bar;
+        break;
+      case ConnectionQuality.poor:
+        color = Colors.red;
+        icon = Icons.signal_cellular_alt_1_bar;
+        break;
+      case ConnectionQuality.disconnected:
+        color = Colors.red;
+        icon = Icons.signal_cellular_off;
+        break;
+    }
+    return Icon(icon, color: color, size: 16);
+  }
+
   Widget _buildTopBar(CallState state, CallParticipant? participant) {
     return Positioned(
       top: 0,
@@ -328,6 +354,10 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
                             fontSize: 14,
                           ),
                         ),
+                        if (state == CallState.active) ...[                         
+                          const SizedBox(width: 8),
+                          _buildQualityIndicator(),
+                        ],
                       ],
                     ),
                   ],

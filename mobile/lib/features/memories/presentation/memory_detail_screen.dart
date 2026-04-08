@@ -30,45 +30,76 @@ class _MemoryDetailScreenState extends State<MemoryDetailScreen> {
   bool _isSaving = false;
   bool _isEditing = false;
 
-  /// The correct memory list based on source (vault vs regular)
-  List<Memory> get _sourceMemories => widget.isVault
-      ? _memoryProvider.vaultMemories
-      : _memoryProvider.memories;
+  /// Cached snapshot of the memory list – prevents PageView from jumping
+  /// when the provider notifies unrelated changes.
+  late List<Memory> _cachedMemories;
+
+  List<Memory> get _sourceMemories => _cachedMemories;
+
+  void _refreshMemoryList() {
+    _cachedMemories = List<Memory>.from(
+      widget.isVault ? _memoryProvider.vaultMemories : _memoryProvider.memories,
+    );
+  }
 
   @override
   void initState() {
     super.initState();
-    _memoryProvider.addListener(_onUpdate);
-    _currentIndex = _sourceMemories.indexWhere((m) => m.id == widget.memoryId);
+    _memoryProvider.addListener(_onProviderUpdate);
+    _refreshMemoryList();
+    _currentIndex = _cachedMemories.indexWhere((m) => m.id == widget.memoryId);
     if (_currentIndex < 0) _currentIndex = 0;
     _pageController = PageController(initialPage: _currentIndex);
     _initVideoIfNeeded(_currentIndex);
   }
 
-  void _onUpdate() {
-    if (mounted) setState(() {});
+  /// Only rebuild when the memory list actually changed (add/delete/edit).
+  void _onProviderUpdate() {
+    if (!mounted) return;
+    final fresh = widget.isVault
+        ? _memoryProvider.vaultMemories
+        : _memoryProvider.memories;
+    // Skip rebuild if length & IDs haven't changed
+    if (fresh.length == _cachedMemories.length &&
+        _cachedMemories.every((m) => fresh.any((f) => f.id == m.id))) {
+      return;
+    }
+    setState(() => _refreshMemoryList());
   }
+
+  bool _videoError = false;
 
   Future<void> _initVideoIfNeeded(int index) async {
     if (index < 0 || index >= _sourceMemories.length) return;
-    
+
     final memory = _sourceMemories[index];
     if (memory.isVideo) {
-      _videoController?.dispose();
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(memory.mediaUrl));
-      await _videoController!.initialize();
-      await _videoController!.setLooping(true);
-      await _videoController!.play();
-      if (mounted) setState(() {});
-    } else {
+      _videoError = false;
       _videoController?.dispose();
       _videoController = null;
+      try {
+        _videoController = VideoPlayerController.networkUrl(Uri.parse(memory.mediaUrl));
+        await _videoController!.initialize();
+        await _videoController!.setLooping(true);
+        await _videoController!.play();
+      } catch (_) {
+        _videoController?.dispose();
+        _videoController = null;
+        _videoError = true;
+      }
+      if (mounted) setState(() {});
+    } else {
+      final hadVideo = _videoController != null;
+      _videoController?.dispose();
+      _videoController = null;
+      _videoError = false;
+      if (hadVideo && mounted) setState(() {});
     }
   }
 
   @override
   void dispose() {
-    _memoryProvider.removeListener(_onUpdate);
+    _memoryProvider.removeListener(_onProviderUpdate);
     _pageController.dispose();
     _videoController?.dispose();
     super.dispose();
@@ -163,53 +194,65 @@ class _MemoryDetailScreenState extends State<MemoryDetailScreen> {
   }
 
   Widget _buildMemoryView(Memory memory, bool isActive) {
-    if (memory.isVideo && isActive && _videoController != null) {
-      return Center(
-        child: _videoController!.value.isInitialized
-            ? AspectRatio(
-                aspectRatio: _videoController!.value.aspectRatio,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    VideoPlayer(_videoController!),
-                    // Play/pause overlay
-                    GestureDetector(
-                      onTap: () {
-                        if (_videoController!.value.isPlaying) {
-                          _videoController!.pause();
-                        } else {
-                          _videoController!.play();
-                        }
-                        setState(() {});
-                      },
-                      child: Container(
-                        color: Colors.transparent,
-                        child: Center(
-                          child: AnimatedOpacity(
-                            opacity: _videoController!.value.isPlaying ? 0 : 1,
-                            duration: const Duration(milliseconds: 200),
-                            child: Container(
-                              width: 64,
-                              height: 64,
-                              decoration: const BoxDecoration(
-                                color: Colors.black45,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.play_arrow_rounded,
-                                color: Colors.white,
-                                size: 40,
-                              ),
-                            ),
+    if (memory.isVideo && isActive) {
+      if (_videoError) {
+        return const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.videocam_off, color: Colors.white54, size: 64),
+              SizedBox(height: 12),
+              Text('Unable to play video', style: TextStyle(color: Colors.white54)),
+            ],
+          ),
+        );
+      }
+      if (_videoController != null && _videoController!.value.isInitialized) {
+        return Center(
+          child: AspectRatio(
+            aspectRatio: _videoController!.value.aspectRatio,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                VideoPlayer(_videoController!),
+                GestureDetector(
+                  onTap: () {
+                    if (_videoController!.value.isPlaying) {
+                      _videoController!.pause();
+                    } else {
+                      _videoController!.play();
+                    }
+                    setState(() {});
+                  },
+                  child: Container(
+                    color: Colors.transparent,
+                    child: Center(
+                      child: AnimatedOpacity(
+                        opacity: _videoController!.value.isPlaying ? 0 : 1,
+                        duration: const Duration(milliseconds: 200),
+                        child: Container(
+                          width: 64,
+                          height: 64,
+                          decoration: const BoxDecoration(
+                            color: Colors.black45,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.play_arrow_rounded,
+                            color: Colors.white,
+                            size: 40,
                           ),
                         ),
                       ),
                     ),
-                  ],
+                  ),
                 ),
-              )
-            : const CircularProgressIndicator(color: Colors.white),
-      );
+              ],
+            ),
+          ),
+        );
+      }
+      return const Center(child: CircularProgressIndicator(color: Colors.white));
     }
 
     // Image
@@ -219,6 +262,9 @@ class _MemoryDetailScreenState extends State<MemoryDetailScreen> {
       child: CachedNetworkImage(
         imageUrl: memory.mediaUrl,
         fit: BoxFit.contain,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        useOldImageOnUrlChange: true,
         placeholder: (context, url) => const Center(
           child: CircularProgressIndicator(color: Colors.white),
         ),

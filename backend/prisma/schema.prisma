@@ -98,6 +98,8 @@ model User {
   safetyRatingsGiven    SafetyWalkRating[]   @relation("SafetyRater")
   safetyRatingsReceived SafetyWalkRating[]   @relation("SafetyRated")
   safetyScore           SafetyScore?
+  callsMade             CallLog[]    @relation("CallsMade")
+  callsReceived         CallLog[]    @relation("CallsReceived")
   
   @@index([username])
   @@index([email])
@@ -892,6 +894,18 @@ enum FriendRequestStatus {
   DECLINED
 }
 
+enum CallType {
+  VOICE
+  VIDEO
+}
+
+enum CallStatus {
+  COMPLETED
+  MISSED
+  DECLINED
+  FAILED
+}
+
 enum FriendshipLevel {
   NORMAL
   CLOSE
@@ -1095,4 +1109,27 @@ model SafetyScore {
   avgRating       Float    @default(5.0)
   lastUpdatedAt   DateTime @default(now())
   user            User     @relation(fields: [userId], references: [id])
+}
+
+// ==================================================
+// CALL LOGS
+// ==================================================
+
+model CallLog {
+  id          String     @id @default(uuid())
+  callerId    String
+  receiverId  String
+  callType    CallType
+  status      CallStatus
+  duration    Int        @default(0)
+  startedAt   DateTime   @default(now())
+  endedAt     DateTime?
+  createdAt   DateTime   @default(now())
+
+  caller      User       @relation("CallsMade", fields: [callerId], references: [id])
+  receiver    User       @relation("CallsReceived", fields: [receiverId], references: [id])
+
+  @@index([callerId])
+  @@index([receiverId])
+  @@index([startedAt])
 }

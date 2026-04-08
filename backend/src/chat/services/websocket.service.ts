@@ -265,6 +265,19 @@ class WebSocketService {
           callTimeouts.delete(callId);
         }
         activeCalls.delete(callId);
+
+        // Log failed/interrupted call
+        prisma.callLog.create({
+          data: {
+            callerId: call.callerId,
+            receiverId: call.targetId,
+            callType: call.callType === 'voice' ? 'VOICE' : 'VIDEO',
+            status: duration > 0 ? 'COMPLETED' : 'FAILED',
+            duration,
+            startedAt: call.startTime,
+            endedAt: new Date(),
+          },
+        }).catch((err: any) => logger.error('Failed to log interrupted call:', err));
         
         logger.info(`Call ${callId} ended due to user ${userId} disconnect`);
       }
@@ -555,6 +568,18 @@ class WebSocketService {
           activeCalls.delete(callId);
           callTimeouts.delete(callId);
           
+          // Log missed call
+          prisma.callLog.create({
+            data: {
+              callerId,
+              receiverId: targetUserId,
+              callType: callType === 'voice' ? 'VOICE' : 'VIDEO',
+              status: 'MISSED',
+              duration: 0,
+              endedAt: new Date(),
+            },
+          }).catch((err: any) => logger.error('Failed to log missed call:', err));
+          
           logger.info(`Call ${callId} missed (timeout)`);
         }
       }, 30000);
@@ -655,6 +680,18 @@ class WebSocketService {
       // Remove call from active calls
       activeCalls.delete(callId);
 
+      // Log declined call
+      prisma.callLog.create({
+        data: {
+          callerId: call.callerId,
+          receiverId: call.targetId,
+          callType: call.callType === 'voice' ? 'VOICE' : 'VIDEO',
+          status: 'DECLINED',
+          duration: 0,
+          endedAt: new Date(),
+        },
+      }).catch((err: any) => logger.error('Failed to log declined call:', err));
+
       logger.info(`Call ${callId} declined by ${userId}`);
     } catch (error) {
       logger.error('Error declining call:', error);
@@ -708,6 +745,19 @@ class WebSocketService {
 
       // Remove call from active calls
       activeCalls.delete(callId);
+
+      // Log completed call
+      prisma.callLog.create({
+        data: {
+          callerId: call.callerId,
+          receiverId: call.targetId,
+          callType: call.callType === 'voice' ? 'VOICE' : 'VIDEO',
+          status: 'COMPLETED',
+          duration,
+          startedAt: call.startTime,
+          endedAt: new Date(),
+        },
+      }).catch((err: any) => logger.error('Failed to log completed call:', err));
 
       logger.info(`Call ${callId} ended by ${userId}, duration: ${duration}s`);
     } catch (error) {

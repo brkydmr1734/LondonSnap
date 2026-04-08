@@ -28,6 +28,7 @@ import aiRoutes from './ai/routes/ai.routes';
 import transportRoutes from './transport/routes/transport.routes';
 import memoryRoutes from './memories/routes/memory.routes';
 import safetyWalkRoutes from './safety-walk/routes/safety-walk.routes';
+import callRoutes from './chat/routes/call.routes';
 
 // Import middleware
 import { errorHandler } from './common/middleware/errorHandler';
@@ -129,6 +130,7 @@ app.use(`${apiPrefix}/admin`, adminRoutes);
 app.use(`${apiPrefix}/ai`, authMiddleware, aiRoutes);
 app.use(`${apiPrefix}/transport`, transportRoutes);  // Public - no auth required
 app.use(`${apiPrefix}/safety-walk`, authMiddleware, safetyWalkRoutes);
+app.use(`${apiPrefix}/calls`, authMiddleware, callRoutes);
 
 // Serve admin panel static files
 const adminDistPath = path.join(__dirname, '..', 'admin-dist');

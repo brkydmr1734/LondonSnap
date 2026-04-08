@@ -3,32 +3,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:londonsnaps/core/config/app_config.dart';
 
+/// Connection quality levels
+enum ConnectionQuality { excellent, good, poor, disconnected }
+
 /// WebRTC service for managing peer connections, media streams, and ICE candidates
 class WebRTCService {
-  // STUN + TURN servers for reliable NAT traversal
-  static const List<Map<String, dynamic>> _iceServers = [
+  // ICE servers - will be overridden by fetched credentials
+  List<Map<String, dynamic>> _iceServers = [
     {'urls': 'stun:stun.l.google.com:19302'},
     {'urls': 'stun:stun1.l.google.com:19302'},
-    {
-      'urls': 'turn:a.relay.metered.ca:80',
-      'username': 'e8dd65a92f3c1be0f5b4a790',
-      'credential': 'sFAnOL6g5jXBbkGi',
-    },
-    {
-      'urls': 'turn:a.relay.metered.ca:80?transport=tcp',
-      'username': 'e8dd65a92f3c1be0f5b4a790',
-      'credential': 'sFAnOL6g5jXBbkGi',
-    },
-    {
-      'urls': 'turn:a.relay.metered.ca:443',
-      'username': 'e8dd65a92f3c1be0f5b4a790',
-      'credential': 'sFAnOL6g5jXBbkGi',
-    },
-    {
-      'urls': 'turns:a.relay.metered.ca:443',
-      'username': 'e8dd65a92f3c1be0f5b4a790',
-      'credential': 'sFAnOL6g5jXBbkGi',
-    },
   ];
 
   RTCPeerConnection? _peerConnection;
@@ -47,6 +30,13 @@ class WebRTCService {
   bool _isSpeakerOn = true;
   bool _isFrontCamera = true;
 
+  // Connection quality tracking
+  ConnectionQuality _connectionQuality = ConnectionQuality.excellent;
+  Timer? _statsTimer;
+  int _prevBytesReceived = 0;
+  ConnectionQuality get connectionQuality => _connectionQuality;
+  Function(ConnectionQuality)? onConnectionQualityChange;
+
   // Track whether remote description has been set (for ICE candidate queuing)
   bool _remoteDescriptionSet = false;
   bool get remoteDescriptionSet => _remoteDescriptionSet;
@@ -58,6 +48,11 @@ class WebRTCService {
   MediaStream? get localStream => _localStream;
   MediaStream? get remoteStream => _remoteStream;
   RTCPeerConnection? get peerConnection => _peerConnection;
+
+  /// Set ICE servers (called with fetched credentials from backend)
+  void setIceServers(List<Map<String, dynamic>> servers) {
+    _iceServers = servers;
+  }
 
   /// Initialize WebRTC peer connection
   Future<void> initialize({required bool isVideoCall}) async {
@@ -158,6 +153,74 @@ class WebRTCService {
       _remoteStream = stream;
       onRemoteStream?.call(stream);
     };
+  }
+
+  /// Start monitoring connection quality via getStats()
+  void startQualityMonitoring() {
+    _statsTimer?.cancel();
+    _prevBytesReceived = 0;
+    _statsTimer = Timer.periodic(const Duration(seconds: 3), (_) => _checkConnectionQuality());
+  }
+
+  /// Stop monitoring
+  void stopQualityMonitoring() {
+    _statsTimer?.cancel();
+    _statsTimer = null;
+  }
+
+  Future<void> _checkConnectionQuality() async {
+    if (_peerConnection == null) return;
+
+    try {
+      final stats = await _peerConnection!.getStats();
+      double? roundTripTime;
+      double? packetLossPercent;
+      int currentBytesReceived = 0;
+
+      for (final report in stats) {
+        final values = report.values;
+        if (report.type == 'candidate-pair' && values['state'] == 'succeeded') {
+          roundTripTime = (values['currentRoundTripTime'] as num?)?.toDouble();
+        }
+        if (report.type == 'inbound-rtp' && values['kind'] == 'audio') {
+          final lost = (values['packetsLost'] as num?)?.toInt() ?? 0;
+          final received = (values['packetsReceived'] as num?)?.toInt() ?? 0;
+          if (received + lost > 0) {
+            packetLossPercent = (lost / (received + lost)) * 100;
+          }
+        }
+        if (report.type == 'inbound-rtp') {
+          currentBytesReceived += (values['bytesReceived'] as num?)?.toInt() ?? 0;
+        }
+      }
+
+      // Determine quality level
+      ConnectionQuality newQuality;
+      if (currentBytesReceived <= _prevBytesReceived && _prevBytesReceived > 0) {
+        // No data flowing
+        newQuality = ConnectionQuality.disconnected;
+      } else if (roundTripTime != null && roundTripTime > 0.5) {
+        newQuality = ConnectionQuality.poor;
+      } else if (packetLossPercent != null && packetLossPercent > 10) {
+        newQuality = ConnectionQuality.poor;
+      } else if (roundTripTime != null && roundTripTime > 0.2) {
+        newQuality = ConnectionQuality.good;
+      } else if (packetLossPercent != null && packetLossPercent > 3) {
+        newQuality = ConnectionQuality.good;
+      } else {
+        newQuality = ConnectionQuality.excellent;
+      }
+
+      _prevBytesReceived = currentBytesReceived;
+
+      if (newQuality != _connectionQuality) {
+        _connectionQuality = newQuality;
+        onConnectionQualityChange?.call(newQuality);
+        if (AppConfig.isDev) debugPrint('[WebRTC] Quality: $newQuality');
+      }
+    } catch (e) {
+      if (AppConfig.isDev) debugPrint('[WebRTC] Stats error: $e');
+    }
   }
 
   /// Create SDP offer (for call initiator)
@@ -288,11 +351,17 @@ class WebRTCService {
       _isFrontCamera = true;
       _remoteDescriptionSet = false;
 
+      // Stop quality monitoring
+      stopQualityMonitoring();
+      _connectionQuality = ConnectionQuality.excellent;
+      _prevBytesReceived = 0;
+
       // Clear callbacks
       onIceCandidate = null;
       onRemoteStream = null;
       onConnectionStateChange = null;
       onIceConnectionStateChange = null;
+      onConnectionQualityChange = null;
 
       if (AppConfig.isDev) debugPrint('[WebRTC] Disposed');
     } catch (e) {

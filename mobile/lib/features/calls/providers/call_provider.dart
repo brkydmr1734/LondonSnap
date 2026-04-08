@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:londonsnaps/core/api/api_service.dart';
 import 'package:londonsnaps/core/config/app_config.dart';
+import 'package:londonsnaps/core/services/callkit_service.dart';
 import 'package:londonsnaps/features/calls/services/webrtc_service.dart';
 import 'package:londonsnaps/features/chat/services/socket_service.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 /// Call states
 enum CallState {
@@ -42,6 +45,7 @@ class CallProvider extends ChangeNotifier {
 
   final ChatSocketService _socketService = ChatSocketService();
   final WebRTCService _webrtcService = WebRTCService();
+  final CallKitService _callKitService = CallKitService();
   StreamSubscription? _socketSubscription;
 
   // Call state
@@ -57,6 +61,7 @@ class CallProvider extends ChangeNotifier {
 
   // Pending ICE candidates (received before remote description is set)
   final List<RTCIceCandidate> _pendingCandidates = [];
+  Timer? _disconnectTimer;
 
   // Getters
   CallState get state => _state;
@@ -71,11 +76,25 @@ class CallProvider extends ChangeNotifier {
   bool get isVideoEnabled => _webrtcService.isVideoEnabled;
   bool get isSpeakerOn => _webrtcService.isSpeakerOn;
   bool get isFrontCamera => _webrtcService.isFrontCamera;
+  ConnectionQuality get connectionQuality => _webrtcService.connectionQuality;
 
   /// Initialize call provider and listen to socket events
   void init() {
     _socketSubscription?.cancel();
     _socketSubscription = _socketService.events.listen(_handleSocketEvent);
+
+    // Initialize CallKit and wire callbacks
+    _callKitService.init();
+    _callKitService.onAccept = () {
+      acceptCall();
+    };
+    _callKitService.onDecline = () {
+      declineCall();
+    };
+    _callKitService.onEnd = () {
+      endCall();
+    };
+
     if (AppConfig.isDev) debugPrint('[CallProvider] Initialized');
   }
 
@@ -142,6 +161,15 @@ class CallProvider extends ChangeNotifier {
       callType: isVideo ? 'video' : 'voice',
     );
 
+    // Report outgoing call to native system
+    if (_callId != null) {
+      _callKitService.reportOutgoingCall(
+        callId: _callId!,
+        calleeName: targetUserName,
+        isVideo: isVideo,
+      );
+    }
+
     if (AppConfig.isDev) debugPrint('[CallProvider] Initiating ${isVideo ? 'video' : 'voice'} call to $targetUserName');
   }
 
@@ -168,6 +196,14 @@ class CallProvider extends ChangeNotifier {
       id: event.callerId,
       name: event.callerName,
       avatarUrl: event.callerAvatar,
+    );
+
+    // Show native CallKit UI
+    _callKitService.showIncomingCall(
+      callId: event.callId,
+      callerName: event.callerName,
+      callerAvatar: event.callerAvatar,
+      isVideo: event.isVideoCall,
     );
 
     if (AppConfig.isDev) debugPrint('[CallProvider] Incoming call from ${event.callerName}');
@@ -323,6 +359,32 @@ class CallProvider extends ChangeNotifier {
   /// Initialize WebRTC service
   Future<void> _initializeWebRTC() async {
     _errorMessage = null;
+
+    // Check and request permissions before initializing WebRTC
+    final micStatus = await Permission.microphone.request();
+    if (!micStatus.isGranted) {
+      throw Exception('Microphone permission denied');
+    }
+
+    if (_isVideoCall) {
+      final camStatus = await Permission.camera.request();
+      if (!camStatus.isGranted) {
+        throw Exception('Camera permission denied');
+      }
+    }
+
+    // Fetch TURN credentials from backend before initializing
+    try {
+      final credResponse = await ApiService().getTurnCredentials();
+      final iceServers = credResponse.data['data']['iceServers'] as List;
+      _webrtcService.setIceServers(
+        iceServers.map<Map<String, dynamic>>((s) => Map<String, dynamic>.from(s)).toList(),
+      );
+      if (AppConfig.isDev) debugPrint('[CallProvider] Fetched TURN credentials from backend');
+    } catch (e) {
+      if (AppConfig.isDev) debugPrint('[CallProvider] Failed to fetch TURN credentials, using defaults: $e');
+    }
+
     await _webrtcService.initialize(isVideoCall: _isVideoCall);
 
     // Set up callbacks
@@ -347,6 +409,10 @@ class CallProvider extends ChangeNotifier {
     _webrtcService.onIceConnectionStateChange = (state) {
       _handleIceConnectionStateChange(state);
     };
+
+    _webrtcService.onConnectionQualityChange = (quality) {
+      notifyListeners(); // Notify UI of quality changes
+    };
   }
 
   /// Handle WebRTC connection state changes
@@ -355,8 +421,11 @@ class CallProvider extends ChangeNotifier {
 
     switch (state) {
       case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+        _disconnectTimer?.cancel();
+        _disconnectTimer = null;
         _state = CallState.active;
         _startCallTimer();
+        _webrtcService.startQualityMonitoring();
         notifyListeners();
         break;
       case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
@@ -372,6 +441,21 @@ class CallProvider extends ChangeNotifier {
         }
         break;
       case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
+        // Start a 15-second timer — if not reconnected, end call
+        if (_state == CallState.active) {
+          _disconnectTimer?.cancel();
+          _disconnectTimer = Timer(const Duration(seconds: 15), () {
+            if (AppConfig.isDev) debugPrint('[CallProvider] Disconnected for 15s, ending call');
+            endCall();
+          });
+          // Try ICE restart after 5s
+          Timer(const Duration(seconds: 5), () {
+            if (_state == CallState.active) {
+              _webrtcService.peerConnection?.restartIce();
+            }
+          });
+        }
+        break;
       case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
         if (_state == CallState.active || _state == CallState.connecting) {
           _resetCallState();
@@ -412,6 +496,7 @@ class CallProvider extends ChangeNotifier {
     if (_callId != null) {
       _socketService.endCall(_callId!);
     }
+    await _callKitService.endCall();
     _resetCallState();
   }
 
@@ -443,7 +528,10 @@ class CallProvider extends ChangeNotifier {
   Future<void> _resetCallState() async {
     _callTimer?.cancel();
     _callTimer = null;
+    _disconnectTimer?.cancel();
+    _disconnectTimer = null;
     await _webrtcService.dispose();
+    await _callKitService.endCall();
     _pendingCandidates.clear();
 
     _state = CallState.ended;
@@ -475,6 +563,7 @@ class CallProvider extends ChangeNotifier {
     _socketSubscription?.cancel();
     _callTimer?.cancel();
     _webrtcService.dispose();
+    _callKitService.dispose();
     super.dispose();
   }
 }

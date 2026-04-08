@@ -25,6 +25,7 @@ import 'package:londonsnaps/features/memories/presentation/memory_detail_screen.
 import 'package:londonsnaps/features/profile/presentation/saved_content_screen.dart';
 import 'package:londonsnaps/features/calls/presentation/incoming_call_screen.dart';
 import 'package:londonsnaps/features/calls/presentation/active_call_screen.dart';
+import 'package:londonsnaps/features/calls/presentation/call_history_screen.dart';
 import 'package:londonsnaps/features/safety_walk/presentation/safety_walk_history_screen.dart';
 import 'package:londonsnaps/shared/widgets/main_scaffold.dart';
 
@@ -212,6 +213,11 @@ final GoRouter appRouter = GoRouter(
     ),
 
     // Call routes
+    GoRoute(
+      path: '/calls',
+      parentNavigatorKey: _rootNavigatorKey,
+      pageBuilder: (context, state) => _slideUpTransition(state, const CallHistoryScreen()),
+    ),
     GoRoute(
       path: '/incoming-call',
       parentNavigatorKey: _rootNavigatorKey,

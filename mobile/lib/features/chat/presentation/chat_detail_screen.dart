@@ -285,7 +285,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     return '${m.toString().padLeft(1, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
-  // ignore: unused_element
   void _initiateCall({required bool isVideo}) async {
     final chat = _currentChat;
     final userId = _authProvider.currentUser?.id ?? '';
@@ -361,11 +360,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         children: [
           if (chat?.backgroundUrl != null)
             Positioned.fill(
-              child: CachedNetworkImage(
-                imageUrl: chat!.backgroundUrl!,
+              child: Image.network(
+                chat!.backgroundUrl!,
                 fit: BoxFit.cover,
                 color: Colors.black.withValues(alpha: 0.3),
                 colorBlendMode: BlendMode.darken,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.high,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
               ),
             ),
           Column(
@@ -491,23 +493,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       actions: [
         IconButton(
           icon: Icon(Icons.phone_outlined, 
-            color: _SnapColors.textPrimary.withValues(alpha: 0.5), size: 22),
-          tooltip: 'Voice Call - Coming Soon',
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Voice Call - Coming Soon...'), duration: Duration(seconds: 2)),
-            );
-          },
+            color: _SnapColors.textPrimary, size: 22),
+          tooltip: 'Voice Call',
+          onPressed: () => _initiateCall(isVideo: false),
         ),
         IconButton(
           icon: Icon(Icons.videocam_outlined, 
-            color: _SnapColors.textPrimary.withValues(alpha: 0.5), size: 22),
-          tooltip: 'Video Call - Coming Soon',
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Video Call - Coming Soon...'), duration: Duration(seconds: 2)),
-            );
-          },
+            color: _SnapColors.textPrimary, size: 22),
+          tooltip: 'Video Call',
+          onPressed: () => _initiateCall(isVideo: true),
         ),
         PopupMenuButton<String>(
           icon: Icon(Icons.menu, color: _SnapColors.textPrimary.withValues(alpha: 0.7), size: 22),
@@ -2660,17 +2654,21 @@ class _BackgroundPickerSheetState extends State<_BackgroundPickerSheet> {
                               children: [
                                 ClipRRect(
                                   borderRadius: BorderRadius.circular(7),
-                                  child: CachedNetworkImage(
-                                    imageUrl: memory.thumbnailUrl ?? memory.mediaUrl,
+                                  child: Image.network(
+                                    memory.mediaUrl,
                                     fit: BoxFit.cover,
-                                    placeholder: (_, __) => Container(
-                                      color: _SnapColors.divider,
-                                      child: const Center(
-                                        child: SizedBox(width: 20, height: 20,
-                                          child: CircularProgressIndicator(strokeWidth: 2, color: _SnapColors.textMuted)),
-                                      ),
-                                    ),
-                                    errorWidget: (_, __, ___) => Container(
+                                    filterQuality: FilterQuality.high,
+                                    loadingBuilder: (_, child, progress) {
+                                      if (progress == null) return child;
+                                      return Container(
+                                        color: _SnapColors.divider,
+                                        child: const Center(
+                                          child: SizedBox(width: 20, height: 20,
+                                            child: CircularProgressIndicator(strokeWidth: 2, color: _SnapColors.textMuted)),
+                                        ),
+                                      );
+                                    },
+                                    errorBuilder: (_, __, ___) => Container(
                                       color: _SnapColors.divider,
                                       child: const Icon(Icons.broken_image, color: _SnapColors.textMuted),
                                     ),

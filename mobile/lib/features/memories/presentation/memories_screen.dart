@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:video_player/video_player.dart';
 import 'package:londonsnaps/core/theme/app_theme.dart';
 import 'package:londonsnaps/features/memories/models/memory_models.dart';
 import 'package:londonsnaps/features/memories/providers/memory_provider.dart';
@@ -1697,10 +1698,12 @@ class _CameraRollDetailScreen extends StatefulWidget {
 
 class _CameraRollDetailScreenState extends State<_CameraRollDetailScreen> {
   File? _file;
+  VideoPlayerController? _videoController;
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isSending = false;
   bool _showControls = true;
+  bool _videoError = false;
 
   @override
   void initState() {
@@ -1710,7 +1713,25 @@ class _CameraRollDetailScreenState extends State<_CameraRollDetailScreen> {
 
   Future<void> _loadFile() async {
     final file = await widget.asset.file;
-    if (mounted) setState(() { _file = file; _isLoading = false; });
+    if (!mounted || file == null) return;
+    _file = file;
+    if (widget.asset.type == AssetType.video) {
+      try {
+        _videoController = VideoPlayerController.file(file);
+        await _videoController!.initialize();
+        await _videoController!.setLooping(true);
+        await _videoController!.play();
+      } catch (_) {
+        _videoError = true;
+      }
+    }
+    if (mounted) setState(() => _isLoading = false);
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    super.dispose();
   }
 
   @override
@@ -1725,7 +1746,7 @@ class _CameraRollDetailScreenState extends State<_CameraRollDetailScreen> {
             if (_isLoading || _file == null)
               const Center(child: CircularProgressIndicator(color: _snapYellow))
             else if (widget.asset.type == AssetType.video)
-              const Center(child: Icon(Icons.videocam, color: Colors.white54, size: 64))
+              _buildVideoView()
             else
               InteractiveViewer(
                 minScale: 1, maxScale: 3,
@@ -1750,6 +1771,59 @@ class _CameraRollDetailScreenState extends State<_CameraRollDetailScreen> {
                   ),
                 ),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVideoView() {
+    if (_videoError || _videoController == null || !_videoController!.value.isInitialized) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.videocam_off, color: Colors.white54, size: 64),
+            SizedBox(height: 12),
+            Text('Unable to play video', style: TextStyle(color: Colors.white54)),
+          ],
+        ),
+      );
+    }
+    return Center(
+      child: AspectRatio(
+        aspectRatio: _videoController!.value.aspectRatio,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            VideoPlayer(_videoController!),
+            GestureDetector(
+              onTap: () {
+                if (_videoController!.value.isPlaying) {
+                  _videoController!.pause();
+                } else {
+                  _videoController!.play();
+                }
+                setState(() {});
+              },
+              child: Container(
+                color: Colors.transparent,
+                child: Center(
+                  child: AnimatedOpacity(
+                    opacity: _videoController!.value.isPlaying ? 0 : 1,
+                    duration: const Duration(milliseconds: 200),
+                    child: Container(
+                      width: 64, height: 64,
+                      decoration: const BoxDecoration(
+                        color: Colors.black45,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 40),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),

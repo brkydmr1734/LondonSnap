@@ -190,6 +190,13 @@ class _ChatsScreenState extends State<ChatsScreen>
             ),
           ),
           const Spacer(),
+          // Call history
+          IconButton(
+            icon: const Icon(Icons.phone_outlined, color: _SnapColors.textPrimary, size: 24),
+            onPressed: () => context.push('/calls'),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+          ),
           // Notification bell
           const NotificationBell(),
           // New chat icon with + badge

@@ -728,6 +728,18 @@ class ApiService {
     return _dio.delete('/safety-walk/$walkId');
   }
 
+  // ── Calls ──
+  Future<Response> getCallHistory({int limit = 30, int offset = 0}) async {
+    return _dio.get('/calls/history', queryParameters: {
+      'limit': limit,
+      'offset': offset,
+    });
+  }
+
+  Future<Response> getTurnCredentials() async {
+    return _dio.get('/calls/turn-credentials');
+  }
+
   // ── University Verification ──
   Future<Response> verifyUniversityEmail(String email) async {
     return _dio.post('/auth/verify-university', data: {
