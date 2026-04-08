@@ -8,10 +8,30 @@ enum ConnectionQuality { excellent, good, poor, disconnected }
 
 /// WebRTC service for managing peer connections, media streams, and ICE candidates
 class WebRTCService {
-  // ICE servers - will be overridden by fetched credentials
+  // ICE servers - includes TURN fallback; overridden by fetched credentials when available
   List<Map<String, dynamic>> _iceServers = [
     {'urls': 'stun:stun.l.google.com:19302'},
     {'urls': 'stun:stun1.l.google.com:19302'},
+    {
+      'urls': 'turn:a.relay.metered.ca:80',
+      'username': 'e8dd65a92f3c1be0f5b4a790',
+      'credential': 'sFAnOL6g5jXBbkGi',
+    },
+    {
+      'urls': 'turn:a.relay.metered.ca:80?transport=tcp',
+      'username': 'e8dd65a92f3c1be0f5b4a790',
+      'credential': 'sFAnOL6g5jXBbkGi',
+    },
+    {
+      'urls': 'turn:a.relay.metered.ca:443',
+      'username': 'e8dd65a92f3c1be0f5b4a790',
+      'credential': 'sFAnOL6g5jXBbkGi',
+    },
+    {
+      'urls': 'turns:a.relay.metered.ca:443',
+      'username': 'e8dd65a92f3c1be0f5b4a790',
+      'credential': 'sFAnOL6g5jXBbkGi',
+    },
   ];
 
   RTCPeerConnection? _peerConnection;

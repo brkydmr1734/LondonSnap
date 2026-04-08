@@ -161,21 +161,22 @@ class CallProvider extends ChangeNotifier {
       callType: isVideo ? 'video' : 'voice',
     );
 
-    // Report outgoing call to native system
-    if (_callId != null) {
-      _callKitService.reportOutgoingCall(
-        callId: _callId!,
-        calleeName: targetUserName,
-        isVideo: isVideo,
-      );
-    }
-
     if (AppConfig.isDev) debugPrint('[CallProvider] Initiating ${isVideo ? 'video' : 'voice'} call to $targetUserName');
   }
 
   /// Handle call initiated acknowledgment from server
   void _handleCallInitiated(String callId) {
     _callId = callId;
+
+    // Report outgoing call to native system now that we have the callId
+    if (_direction == CallDirection.outgoing && _remoteParticipant != null) {
+      _callKitService.reportOutgoingCall(
+        callId: callId,
+        calleeName: _remoteParticipant!.name,
+        isVideo: _isVideoCall,
+      );
+    }
+
     if (AppConfig.isDev) debugPrint('[CallProvider] Call initiated: $callId');
     notifyListeners();
   }
