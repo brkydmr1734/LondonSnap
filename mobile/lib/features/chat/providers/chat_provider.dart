@@ -82,7 +82,8 @@ class ChatProvider extends ChangeNotifier {
   /// Connect WebSocket with auth token from storage
   Future<void> _connectWebSocket() async {
     try {
-      final token = await _storage.read(key: 'access_token');
+      // Get a valid (non-expired) access token, refreshing if needed
+      final token = await ApiService().getValidAccessToken();
       if (token != null) {
         _socket.connect(token);
       }
@@ -178,6 +179,7 @@ class ChatProvider extends ChangeNotifier {
 
       case SocketEventType.error:
         if (AppConfig.isDev) debugPrint('[CHAT] Socket error: ${event.data}');
+        _handleSocketAuthError(event.data);
         break;
 
       // Call events are handled by CallProvider, ignore here
@@ -196,6 +198,7 @@ class ChatProvider extends ChangeNotifier {
 
   void _onSocketConnected() {
     if (AppConfig.isDev) debugPrint('[CHAT] WebSocket connected');
+    _authRetryCount = 0; // Reset auth retry counter on successful connect
     
     // Stop polling - socket is now primary
     _polling.pausePolling();
@@ -215,6 +218,36 @@ class ChatProvider extends ChangeNotifier {
     // Fall back to polling when disconnected
     if (_activeChatId != null && _messages.isNotEmpty) {
       _polling.startPolling(_activeChatId!, since: _messages.first.createdAt);
+    }
+
+    // Auto-reconnect with fresh token after a brief delay
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!_socket.isConnected) {
+        _connectWebSocket();
+      }
+    });
+  }
+
+  /// Handle socket auth errors by refreshing token and reconnecting
+  int _authRetryCount = 0;
+  void _handleSocketAuthError(dynamic error) {
+    final errorStr = error?.toString() ?? '';
+    final isAuthError = errorStr.contains('Token') ||
+        errorStr.contains('Authentication') ||
+        errorStr.contains('Session') ||
+        errorStr.contains('expired') ||
+        errorStr.contains('Invalid');
+
+    if (isAuthError && _authRetryCount < 3) {
+      _authRetryCount++;
+      if (AppConfig.isDev) debugPrint('[CHAT] Auth error, refreshing token (attempt $_authRetryCount)');
+      // Refresh token and reconnect
+      Future.delayed(Duration(seconds: _authRetryCount), () async {
+        final refreshed = await ApiService().forceRefreshToken();
+        if (refreshed) {
+          await _connectWebSocket();
+        }
+      });
     }
   }
 

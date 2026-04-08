@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -138,6 +139,43 @@ class ApiService {
   }
 
   // ── Auth ──
+
+  /// Force refresh the access token. Returns true if successful.
+  /// Used by socket service to ensure token is fresh before connecting.
+  Future<bool> forceRefreshToken() => _refreshToken();
+
+  /// Get a valid access token, refreshing if expired.
+  /// Returns null if no token available.
+  Future<String?> getValidAccessToken() async {
+    String? token = _cachedAccessToken ?? await _storage.read(key: 'access_token');
+    if (token == null) return null;
+
+    // Decode JWT payload to check expiry (no verification needed)
+    try {
+      final parts = token.split('.');
+      if (parts.length == 3) {
+        final normalized = base64Url.normalize(parts[1]);
+        final payloadStr = utf8.decode(base64Url.decode(normalized));
+        final payload = jsonDecode(payloadStr) as Map<String, dynamic>;
+        final exp = payload['exp'] as int?;
+        if (exp != null) {
+          final expiry = DateTime.fromMillisecondsSinceEpoch(exp * 1000);
+          // If token expires within 2 minutes, refresh it
+          if (expiry.isBefore(DateTime.now().add(const Duration(minutes: 2)))) {
+            final refreshed = await _refreshToken();
+            if (refreshed) {
+              return _cachedAccessToken ?? await _storage.read(key: 'access_token');
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // If decode fails, try refresh anyway
+      await _refreshToken();
+      return _cachedAccessToken ?? await _storage.read(key: 'access_token');
+    }
+    return token;
+  }
   Future<Response> login(String email, String password) async {
     return _dio.post('/auth/login', data: {
       'email': email,
