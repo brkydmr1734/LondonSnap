@@ -90,6 +90,23 @@ import AVFoundation
       // Force speaker output
       try session.overrideOutputAudioPort(.speaker)
 
+      // Listen for audio session interruptions (e.g. getUserMedia reconfigures session)
+      NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(handleAudioInterruption),
+        name: AVAudioSession.interruptionNotification,
+        object: nil
+      )
+      // Also listen for route changes (speaker override might get reset)
+      NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(handleRouteChange),
+        name: AVAudioSession.routeChangeNotification,
+        object: nil
+      )
+
       let success = audioPlayer?.play() ?? false
       NSLog("[Ringtone-iOS] play() returned: %d, isPlaying=%d", success ? 1 : 0, audioPlayer?.isPlaying ?? false ? 1 : 0)
       result(nil)
@@ -99,8 +116,44 @@ import AVFoundation
     }
   }
 
+  @objc private func handleAudioInterruption(_ notification: Notification) {
+    guard let info = notification.userInfo,
+          let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+          let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+    NSLog("[Ringtone-iOS] Audio interruption: %@", type == .began ? "began" : "ended")
+
+    if type == .ended {
+      // Interruption ended — resume playback
+      if let player = audioPlayer, !player.isPlaying {
+        do {
+          let session = AVAudioSession.sharedInstance()
+          try session.setActive(true)
+          try session.overrideOutputAudioPort(.speaker)
+          player.play()
+          NSLog("[Ringtone-iOS] Resumed after interruption")
+        } catch {
+          NSLog("[Ringtone-iOS] Resume failed: %@", error.localizedDescription)
+        }
+      }
+    }
+  }
+
+  @objc private func handleRouteChange(_ notification: Notification) {
+    // Re-force speaker if route changed while ringtone is playing
+    if let player = audioPlayer, player.isPlaying {
+      do {
+        try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+      } catch {
+        NSLog("[Ringtone-iOS] Route change speaker override failed: %@", error.localizedDescription)
+      }
+    }
+  }
+
   private func stopAudio() {
     if audioPlayer != nil {
+      NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
+      NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
       audioPlayer?.stop()
       audioPlayer = nil
       NSLog("[Ringtone-iOS] Stopped")

@@ -326,17 +326,27 @@ class CallProvider extends ChangeNotifier {
     );
     notifyListeners();
 
-    // Start outgoing ringback tone
-    _ringtoneService.playOutgoingRingback().catchError((e) {
-      _log('WARNING: ringback tone failed: $e');
-    });
-
-    // Start local camera preview for video calls (so user sees themselves while ringing)
+    // For video calls: start camera preview FIRST, then ringtone.
+    // getUserMedia() reconfigures iOS audio session — if ringtone plays first,
+    // the session change kills AVAudioPlayer. So: preview first, ringtone after.
     if (isVideo) {
       _webrtcService.startLocalPreview().then((_) {
-        notifyListeners(); // trigger UI rebuild to show local video
+        notifyListeners();
+        // Now start ringback AFTER preview is ready (audio session is stable)
+        _ringtoneService.playOutgoingRingback().catchError((e) {
+          _log('WARNING: ringback tone failed: $e');
+        });
       }).catchError((e) {
         _log('WARNING: local preview failed: $e');
+        // Still try ringtone even if preview fails
+        _ringtoneService.playOutgoingRingback().catchError((e2) {
+          _log('WARNING: ringback tone also failed: $e2');
+        });
+      });
+    } else {
+      // Voice call: no preview, just start ringback immediately
+      _ringtoneService.playOutgoingRingback().catchError((e) {
+        _log('WARNING: ringback tone failed: $e');
       });
     }
 
