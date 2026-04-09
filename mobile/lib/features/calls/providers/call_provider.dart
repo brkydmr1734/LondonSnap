@@ -4,6 +4,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:londonsnaps/core/api/api_service.dart';
 import 'package:londonsnaps/core/services/callkit_service.dart';
 import 'package:londonsnaps/core/services/connectivity_service.dart';
+import 'package:londonsnaps/core/services/ringtone_service.dart';
 import 'package:londonsnaps/features/calls/services/webrtc_service.dart';
 import 'package:londonsnaps/features/chat/services/socket_service.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -57,6 +58,7 @@ class CallProvider extends ChangeNotifier {
   final WebRTCService _webrtcService = WebRTCService();
   final CallKitService _callKitService = CallKitService();
   final ConnectivityService _connectivityService = ConnectivityService();
+  final RingtoneService _ringtoneService = RingtoneService();
   StreamSubscription? _socketSubscription;
   bool _initialized = false;
 
@@ -324,6 +326,9 @@ class CallProvider extends ChangeNotifier {
     );
     notifyListeners();
 
+    // Start outgoing ringback tone
+    _ringtoneService.playOutgoingRingback();
+
     // Initiate call via socket
     try {
       if (!_socketService.isConnected) {
@@ -400,6 +405,10 @@ class CallProvider extends ChangeNotifier {
     }
 
     _log('Incoming call from ${event.callerName} (callId=${event.callId}, type=${event.callType})');
+
+    // Play incoming ringtone (in-app; CallKit plays its own natively)
+    _ringtoneService.playIncomingRingtone();
+
     notifyListeners();
   }
 
@@ -411,6 +420,9 @@ class CallProvider extends ChangeNotifier {
     }
 
     if (!_transitionTo(CallState.connecting)) return;
+
+    // Stop incoming ringtone — user answered
+    _ringtoneService.stop();
 
     // Start 30s connection timeout
     _startConnectionTimeout();
@@ -462,6 +474,9 @@ class CallProvider extends ChangeNotifier {
       _log('Cannot transition to connecting for accepted call $callId');
       return;
     }
+
+    // Stop ringback tone — call is being connected
+    _ringtoneService.stop();
 
     // Start 30s connection timeout
     _startConnectionTimeout();
@@ -1029,6 +1044,9 @@ class CallProvider extends ChangeNotifier {
   /// Reset call state to idle
   Future<void> _resetCallState() async {
     _log('Resetting call state (callId=$_callId)');
+
+    // Stop any ringtone/ringback immediately
+    _ringtoneService.stop();
 
     _callTimer?.cancel();
     _callTimer = null;
