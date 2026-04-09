@@ -31,6 +31,7 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
   bool _showControls = true;
   Timer? _hideControlsTimer;
   bool _renderersInitialized = false;
+  bool _hasNavigatedAway = false;
 
   @override
   void initState() {
@@ -101,9 +102,11 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
       });
     }
 
-    // Navigate back when call ends
-    if (_callProvider.state == CallState.idle ||
-        _callProvider.state == CallState.ended) {
+    // Navigate back when call ends (with guard against double-navigation)
+    if (!_hasNavigatedAway &&
+        (_callProvider.state == CallState.idle ||
+         _callProvider.state == CallState.ended)) {
+      _hasNavigatedAway = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           if (Navigator.of(context).canPop()) {
@@ -611,6 +614,7 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
   Widget _buildBottomControls(bool isVideo, MediaQueryData mq) {
     final isActive = _callProvider.state == CallState.active ||
         _callProvider.state == CallState.connecting;
+    final isRinging = _callProvider.state == CallState.ringingOutgoing;
 
     return Positioned(
       bottom: 0,
@@ -656,7 +660,7 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
                     : null,
               ),
 
-              // Video toggle (video calls) / Speaker (voice calls)
+              // Video toggle (video calls only)
               if (isVideo)
                 _CallControlButton(
                   icon: _callProvider.isVideoEnabled
@@ -668,20 +672,6 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
                       ? () {
                           _callProvider.toggleVideo();
                           setState(() {});
-                        }
-                      : null,
-                )
-              else
-                _CallControlButton(
-                  icon: _callProvider.isSpeakerOn
-                      ? Icons.volume_up_rounded
-                      : Icons.volume_down_rounded,
-                  label: 'Speaker',
-                  isActive: _callProvider.isSpeakerOn,
-                  onTap: isActive
-                      ? () async {
-                          try { await _callProvider.toggleSpeaker(); } catch (_) {}
-                          if (mounted) setState(() {});
                         }
                       : null,
                 ),
@@ -705,25 +695,28 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
                       ),
                     ],
                   ),
-                  child: const Icon(Icons.call_end_rounded, color: Colors.white, size: 28),
+                  child: Icon(
+                    isRinging ? Icons.call_end_rounded : Icons.call_end_rounded,
+                    color: Colors.white,
+                    size: 28,
+                  ),
                 ),
               ),
 
-              // Speaker (video calls) / empty for alignment
-              if (isVideo)
-                _CallControlButton(
-                  icon: _callProvider.isSpeakerOn
-                      ? Icons.volume_up_rounded
-                      : Icons.volume_down_rounded,
-                  label: 'Speaker',
-                  isActive: _callProvider.isSpeakerOn,
-                  onTap: isActive
-                      ? () async {
-                          try { await _callProvider.toggleSpeaker(); } catch (_) {}
-                          if (mounted) setState(() {});
-                        }
-                      : null,
-                ),
+              // Speaker (always available)
+              _CallControlButton(
+                icon: _callProvider.isSpeakerOn
+                    ? Icons.volume_up_rounded
+                    : Icons.volume_down_rounded,
+                label: 'Speaker',
+                isActive: _callProvider.isSpeakerOn,
+                onTap: isActive
+                    ? () async {
+                        try { await _callProvider.toggleSpeaker(); } catch (_) {}
+                        if (mounted) setState(() {});
+                      }
+                    : null,
+              ),
             ],
           ),
         ),

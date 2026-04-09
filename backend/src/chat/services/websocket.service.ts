@@ -258,11 +258,10 @@ class WebSocketService {
 
     logger.info(`WebSocket disconnected: ${userId} (${socket.id})`);
 
-    // Clean up any active calls for this user
-    this.cleanupUserCalls(userId);
-
-    // Only broadcast offline if user has no more connections
+    // Only clean up calls and broadcast offline if user has NO remaining connections.
+    // This prevents killing active calls during brief Socket.IO reconnections.
     if (!this.isUserOnline(userId)) {
+      this.cleanupUserCalls(userId);
       this.broadcastUserStatus(userId, false);
 
       // Update user offline status in DB (fire-and-forget)

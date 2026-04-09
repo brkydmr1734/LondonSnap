@@ -67,9 +67,15 @@ export class CallController {
       const credential = process.env.TURN_CREDENTIAL;
 
       if (!username || !credential) {
-        logger.warn('[CALL] TURN credentials requested but env vars not set');
-        return res.status(503).json({ error: 'TURN server not configured' });
+        logger.error('[CALL] TURN_USERNAME or TURN_CREDENTIAL env var is MISSING on this server. WebRTC calls will fall back to STUN-only and likely fail on mobile networks.');
+        return res.status(503).json({
+          success: false,
+          error: 'TURN server not configured',
+          hint: 'Set TURN_USERNAME and TURN_CREDENTIAL environment variables on the server.',
+        });
       }
+
+      logger.info(`[CALL] TURN credentials served to user ${req.user.id}`);
 
       // Time-limited credentials (valid for 24 hours)
       const ttl = 86400; // 24 hours in seconds

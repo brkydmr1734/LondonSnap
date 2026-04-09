@@ -60,6 +60,10 @@ class CallProvider extends ChangeNotifier {
   StreamSubscription? _socketSubscription;
   bool _initialized = false;
 
+  // Sequential async event queue — prevents race conditions during signaling
+  final List<Future<void> Function()> _eventQueue = [];
+  bool _processingQueue = false;
+
   /// Always-on logger for call events (works in production builds)
   void _log(String message) {
     // ignore: avoid_print
@@ -196,7 +200,29 @@ class CallProvider extends ChangeNotifier {
   // Socket event routing
   // ---------------------------------------------------------------------------
 
-  /// Handle socket events related to calls
+  /// Enqueue an async call event handler so they execute SEQUENTIALLY.
+  /// This prevents race conditions (e.g. call_offer arriving while
+  /// _initializeWebRTC is still running inside _handleCallAccepted).
+  void _enqueueCallEvent(Future<void> Function() handler) {
+    _eventQueue.add(handler);
+    _drainEventQueue();
+  }
+
+  Future<void> _drainEventQueue() async {
+    if (_processingQueue) return;
+    _processingQueue = true;
+    while (_eventQueue.isNotEmpty) {
+      final fn = _eventQueue.removeAt(0);
+      try {
+        await fn();
+      } catch (e) {
+        _log('ERROR in queued event handler: $e');
+      }
+    }
+    _processingQueue = false;
+  }
+
+  /// Handle socket events related to calls — all async handlers are queued
   void _handleSocketEvent(SocketEvent event) {
     switch (event.type) {
       case SocketEventType.callInitiated:
@@ -206,7 +232,7 @@ class CallProvider extends ChangeNotifier {
         _handleIncomingCall(event.data as IncomingCallEvent);
         break;
       case SocketEventType.callAccepted:
-        _handleCallAccepted(event.data as String);
+        _enqueueCallEvent(() => _handleCallAccepted(event.data as String));
         break;
       case SocketEventType.callDeclined:
         _handleCallDeclined(event.data as String);
@@ -218,13 +244,13 @@ class CallProvider extends ChangeNotifier {
         _handleCallMissed(event.data as String);
         break;
       case SocketEventType.callOffer:
-        _handleCallOffer(event.data as CallSdpEvent);
+        _enqueueCallEvent(() => _handleCallOffer(event.data as CallSdpEvent));
         break;
       case SocketEventType.callAnswer:
-        _handleCallAnswer(event.data as CallSdpEvent);
+        _enqueueCallEvent(() => _handleCallAnswer(event.data as CallSdpEvent));
         break;
       case SocketEventType.callIceCandidate:
-        _handleIceCandidate(event.data as CallIceCandidateEvent);
+        _enqueueCallEvent(() => _handleIceCandidate(event.data as CallIceCandidateEvent));
         break;
       case SocketEventType.callBusy:
         _handleCallBusy(event.data as String);
@@ -236,7 +262,7 @@ class CallProvider extends ChangeNotifier {
         _handleCallError(event.data as CallErrorEvent);
         break;
       case SocketEventType.callStateSync:
-        _handleCallStateSync(event.data as CallStateSyncEvent);
+        _enqueueCallEvent(() => _handleCallStateSync(event.data as CallStateSyncEvent));
         break;
       default:
         break;
@@ -421,7 +447,16 @@ class CallProvider extends ChangeNotifier {
 
   /// Handle call accepted by remote
   Future<void> _handleCallAccepted(String callId) async {
-    if (_callId != callId) return;
+    // If _callId hasn't been set yet (race with _handleCallInitiated), set it now
+    if (_callId == null && _state == CallState.ringingOutgoing) {
+      _log('WARNING: call_accepted arrived before call_initiated, setting callId=$callId');
+      _callId = callId;
+    }
+
+    if (_callId != callId) {
+      _log('WARNING: call_accepted for callId=$callId but current is $_callId, ignoring');
+      return;
+    }
 
     if (!_transitionTo(CallState.connecting)) {
       _log('Cannot transition to connecting for accepted call $callId');
@@ -493,7 +528,7 @@ class CallProvider extends ChangeNotifier {
   }
 
   /// Handle call_state_sync from server (reconnection recovery)
-  void _handleCallStateSync(CallStateSyncEvent event) {
+  Future<void> _handleCallStateSync(CallStateSyncEvent event) async {
     debugPrint('[CALL-Provider] Received call_state_sync: callId=${event.callId}, type=${event.callType}, isInitiator=${event.isInitiator}');
 
     if (_state == CallState.idle) {
@@ -506,10 +541,30 @@ class CallProvider extends ChangeNotifier {
         id: event.otherUserId,
         name: event.otherUserId, // name not available in sync payload
       );
-      _transitionTo(CallState.active);
-      _startCallTimer();
-      // Note: WebRTC re-initialization would require a new offer/answer exchange
-      // which the server would need to coordinate. For now we restore the UI state.
+
+      // Re-establish WebRTC connection
+      try {
+        await _initializeWebRTC();
+        notifyListeners();
+
+        if (event.isInitiator) {
+          // We were the caller — re-send an offer
+          final offer = await _webrtcService.createOffer();
+          _socketService.sendCallOffer(
+            callId: event.callId,
+            sdp: WebRTCService.sdpToMap(offer),
+          );
+          _log('Re-sent SDP offer after state sync');
+        }
+
+        _transitionTo(CallState.connecting);
+        _startConnectionTimeout();
+      } catch (e) {
+        _log('ERROR re-establishing WebRTC after state sync: $e');
+        _errorMessage = 'Failed to reconnect call';
+        notifyListeners();
+        await _resetCallState();
+      }
     } else if (_callId == event.callId) {
       _log('call_state_sync for already-active call ${event.callId}, ignoring');
     } else {
@@ -737,7 +792,7 @@ class CallProvider extends ChangeNotifier {
       await _doFetchTurn();
       return;
     } catch (e) {
-      _log('[CALL-Provider] TURN fetch failed, falling back to STUN-only');
+      _log('WARNING: TURN fetch failed after 2 attempts, falling back to STUN-only. Calls may fail on mobile networks! Error: $e');
       // Don't block the call — proceed with STUN-only
     }
   }
