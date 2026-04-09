@@ -196,8 +196,13 @@ class WebRTCService {
 
       // Set default speaker mode
       if (!isVideoCall) {
-        await Helper.setSpeakerphoneOn(false);
-        _isSpeakerOn = false;
+        try {
+          await Helper.setSpeakerphoneOn(false);
+          _isSpeakerOn = false;
+        } catch (e) {
+          _log('setSpeakerphoneOn(false) failed during init: $e');
+          _isSpeakerOn = true; // assume speaker is on if we can't set it
+        }
       }
 
       _log('Got user media (audio=true, video=$isVideoCall, tracks=${_localStream?.getTracks().length ?? 0})');
@@ -500,9 +505,15 @@ class WebRTCService {
 
   /// Toggle speaker/earpiece
   Future<void> toggleSpeaker() async {
-    _isSpeakerOn = !_isSpeakerOn;
-    await Helper.setSpeakerphoneOn(_isSpeakerOn);
-    _log('Speaker toggled: $_isSpeakerOn');
+    final newValue = !_isSpeakerOn;
+    try {
+      await Helper.setSpeakerphoneOn(newValue);
+      _isSpeakerOn = newValue;
+      _log('Speaker toggled: $_isSpeakerOn');
+    } catch (e, stack) {
+      _log('toggleSpeaker ERROR: $e\n$stack');
+      // Don't update state if the call failed
+    }
   }
 
   /// Switch between front and back camera

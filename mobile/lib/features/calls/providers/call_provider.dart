@@ -928,7 +928,11 @@ class CallProvider extends ChangeNotifier {
 
   /// Toggle speaker/earpiece
   Future<void> toggleSpeaker() async {
-    await _webrtcService.toggleSpeaker();
+    try {
+      await _webrtcService.toggleSpeaker();
+    } catch (e) {
+      _log('ERROR toggling speaker: $e');
+    }
     notifyListeners();
   }
 

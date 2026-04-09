@@ -472,8 +472,10 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
                   label: 'Speaker',
                   isActive: _callProvider.isSpeakerOn,
                   onTap: () async {
-                    await _callProvider.toggleSpeaker();
-                    setState(() {});
+                    try {
+                      await _callProvider.toggleSpeaker();
+                    } catch (_) {}
+                    if (mounted) setState(() {});
                   },
                 ),
 

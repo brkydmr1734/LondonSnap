@@ -975,7 +975,12 @@ class ChatSocketService extends ChangeNotifier {
 
   /// Accept an incoming call
   void acceptCall(String callId) {
-    _socket?.emit(SocketEvents.callAccept, {'callId': callId});
+    if (_socket == null || !_isConnected) {
+      // ignore: avoid_print
+      print('[SOCKET] Cannot accept call: socket=${_socket != null ? 'exists' : 'null'}, connected=$_isConnected');
+      return;
+    }
+    _socket!.emit(SocketEvents.callAccept, {'callId': callId});
   }
 
   /// Decline an incoming call
@@ -995,7 +1000,12 @@ class ChatSocketService extends ChangeNotifier {
 
   /// Send WebRTC SDP offer
   void sendCallOffer({required String callId, required Map<String, dynamic> sdp}) {
-    _socket?.emit(SocketEvents.callOffer, {
+    if (_socket == null || !_isConnected) {
+      // ignore: avoid_print
+      print('[SOCKET] Cannot send call offer: socket=${_socket != null ? 'exists' : 'null'}, connected=$_isConnected');
+      return;
+    }
+    _socket!.emit(SocketEvents.callOffer, {
       'callId': callId,
       'sdp': sdp,
     });
@@ -1003,7 +1013,12 @@ class ChatSocketService extends ChangeNotifier {
 
   /// Send WebRTC SDP answer
   void sendCallAnswer({required String callId, required Map<String, dynamic> sdp}) {
-    _socket?.emit(SocketEvents.callAnswer, {
+    if (_socket == null || !_isConnected) {
+      // ignore: avoid_print
+      print('[SOCKET] Cannot send call answer: socket=${_socket != null ? 'exists' : 'null'}, connected=$_isConnected');
+      return;
+    }
+    _socket!.emit(SocketEvents.callAnswer, {
       'callId': callId,
       'sdp': sdp,
     });
@@ -1011,7 +1026,12 @@ class ChatSocketService extends ChangeNotifier {
 
   /// Send WebRTC ICE candidate
   void sendIceCandidate({required String callId, required Map<String, dynamic> candidate}) {
-    _socket?.emit(SocketEvents.callIceCandidate, {
+    if (_socket == null || !_isConnected) {
+      // ignore: avoid_print
+      print('[SOCKET] Cannot send ICE candidate: socket=${_socket != null ? 'exists' : 'null'}, connected=$_isConnected');
+      return;
+    }
+    _socket!.emit(SocketEvents.callIceCandidate, {
       'callId': callId,
       'candidate': candidate,
     });
