@@ -392,6 +392,8 @@ class CallProvider extends ChangeNotifier {
     try {
       // Initialize WebRTC
       await _initializeWebRTC();
+      // Notify UI so local video renderer picks up the stream
+      notifyListeners();
 
       // Accept call via socket
       _socketService.acceptCall(_callId!);
@@ -432,6 +434,8 @@ class CallProvider extends ChangeNotifier {
     try {
       // Initialize WebRTC
       await _initializeWebRTC();
+      // Notify UI so local video renderer picks up the stream
+      notifyListeners();
 
       // Create and send offer (as call initiator)
       final offer = await _webrtcService.createOffer();

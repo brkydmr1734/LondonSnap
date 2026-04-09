@@ -195,14 +195,16 @@ class WebRTCService {
       _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
 
       // Set default speaker mode
-      if (!isVideoCall) {
-        try {
-          await Helper.setSpeakerphoneOn(false);
-          _isSpeakerOn = false;
-        } catch (e) {
-          _log('setSpeakerphoneOn(false) failed during init: $e');
-          _isSpeakerOn = true; // assume speaker is on if we can't set it
-        }
+      // Video calls: speaker ON (like Snapchat/FaceTime)
+      // Audio calls: earpiece (speaker OFF)
+      try {
+        final defaultSpeaker = isVideoCall;
+        await Helper.setSpeakerphoneOn(defaultSpeaker);
+        _isSpeakerOn = defaultSpeaker;
+        _log('Default speaker set: $_isSpeakerOn (video=$isVideoCall)');
+      } catch (e) {
+        _log('setSpeakerphoneOn failed during init: $e');
+        _isSpeakerOn = isVideoCall; // assume default based on call type
       }
 
       _log('Got user media (audio=true, video=$isVideoCall, tracks=${_localStream?.getTracks().length ?? 0})');

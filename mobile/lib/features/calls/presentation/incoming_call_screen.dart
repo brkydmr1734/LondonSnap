@@ -5,7 +5,7 @@ import 'package:londonsnaps/core/theme/app_theme.dart';
 import 'package:londonsnaps/features/calls/providers/call_provider.dart';
 import 'package:londonsnaps/shared/widgets/avatar_widget.dart';
 
-/// Incoming call screen with accept/decline options
+/// Premium incoming call screen — Snapchat-style
 class IncomingCallScreen extends StatefulWidget {
   const IncomingCallScreen({super.key});
 
@@ -16,10 +16,13 @@ class IncomingCallScreen extends StatefulWidget {
 class _IncomingCallScreenState extends State<IncomingCallScreen>
     with TickerProviderStateMixin {
   final CallProvider _callProvider = CallProvider();
+
   late AnimationController _pulseController;
-  late AnimationController _ringController;
   late Animation<double> _pulseAnimation;
+  late AnimationController _ringController;
   late Animation<double> _ringAnimation;
+  late AnimationController _slideController;
+
   Timer? _dismissTimer;
 
   @override
@@ -27,35 +30,35 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     super.initState();
     _callProvider.addListener(_onCallStateChanged);
 
-    // Pulse animation for avatar
+    // Avatar pulse
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     )..repeat(reverse: true);
-
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.15).animate(
+    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    // Ring animation for outer circles
+    // Ring ripples
     _ringController = AnimationController(
-      duration: const Duration(milliseconds: 2000),
+      duration: const Duration(milliseconds: 2500),
       vsync: this,
     )..repeat();
-
     _ringAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _ringController, curve: Curves.easeOut),
     );
 
-    // Auto-dismiss after 30 seconds (call will be marked as missed)
+    // Slide-up entrance
+    _slideController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    )..forward();
+
+    // Auto-dismiss after 30s
     _dismissTimer = Timer(const Duration(seconds: 30), () {
       if (mounted && _callProvider.state == CallState.ringingIncoming) {
         _callProvider.declineCall();
-        if (Navigator.of(context).canPop()) {
-          context.pop();
-        } else {
-          context.go('/chats');
-        }
+        _navigateBack();
       }
     });
   }
@@ -63,19 +66,20 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   void _onCallStateChanged() {
     if (!mounted) return;
 
-    // Navigate based on state changes
     if (_callProvider.state == CallState.connecting ||
         _callProvider.state == CallState.active) {
-      // Go to active call screen
       context.go('/active-call');
     } else if (_callProvider.state == CallState.idle ||
         _callProvider.state == CallState.ended) {
-      // Call ended or missed, go back
-      if (Navigator.of(context).canPop()) {
-        context.pop();
-      } else {
-        context.go('/chats');
-      }
+      _navigateBack();
+    }
+  }
+
+  void _navigateBack() {
+    if (Navigator.of(context).canPop()) {
+      context.pop();
+    } else {
+      context.go('/chats');
     }
   }
 
@@ -85,216 +89,229 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     _callProvider.removeListener(_onCallStateChanged);
     _pulseController.dispose();
     _ringController.dispose();
+    _slideController.dispose();
     super.dispose();
   }
 
-  void _acceptCall() {
-    _callProvider.acceptCall();
-  }
+  void _accept() => _callProvider.acceptCall();
 
-  void _declineCall() {
+  void _decline() {
     _callProvider.declineCall();
-    if (Navigator.of(context).canPop()) {
-      context.pop();
-    } else {
-      context.go('/chats');
-    }
+    _navigateBack();
   }
 
   @override
   Widget build(BuildContext context) {
     final participant = _callProvider.remoteParticipant;
     final isVideo = _callProvider.isVideoCall;
+    final mq = MediaQuery.of(context);
 
     return Scaffold(
-      backgroundColor: AppTheme.backgroundColor,
+      backgroundColor: Colors.black,
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              AppTheme.primaryColor.withValues(alpha: 0.3),
-              AppTheme.backgroundColor,
-              AppTheme.backgroundColor,
+              Color(0xFF1A1A2E),
+              Color(0xFF16213E),
+              Color(0xFF0F3460),
+              Color(0xFF1A1A2E),
             ],
+            stops: [0.0, 0.3, 0.7, 1.0],
           ),
         ),
         child: SafeArea(
           child: Column(
             children: [
-              const SizedBox(height: 60),
+              const SizedBox(height: 40),
 
-              // Call type indicator
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppTheme.surfaceColor,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      isVideo ? Icons.videocam : Icons.phone,
-                      color: AppTheme.primaryColor,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      isVideo ? 'Incoming video call' : 'Incoming voice call',
-                      style: const TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const Spacer(flex: 1),
-
-              // Caller avatar with pulse animation
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  // Animated rings
-                  AnimatedBuilder(
-                    animation: _ringAnimation,
-                    builder: (context, child) {
-                      return Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          // First ring
-                          Container(
-                            width: 180 + (60 * _ringAnimation.value),
-                            height: 180 + (60 * _ringAnimation.value),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: AppTheme.primaryColor.withValues(
-                                  alpha: 0.3 * (1 - _ringAnimation.value),
-                                ),
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                          // Second ring (delayed)
-                          Container(
-                            width: 180 + (60 * ((_ringAnimation.value + 0.5) % 1)),
-                            height: 180 + (60 * ((_ringAnimation.value + 0.5) % 1)),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: AppTheme.primaryColor.withValues(
-                                  alpha: 0.3 * (1 - ((_ringAnimation.value + 0.5) % 1)),
-                                ),
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-
-                  // Avatar with pulse
-                  AnimatedBuilder(
-                    animation: _pulseAnimation,
-                    builder: (context, child) {
-                      return Transform.scale(
-                        scale: _pulseAnimation.value,
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: LinearGradient(
-                              colors: [
-                                AppTheme.primaryColor.withValues(alpha: 0.5),
-                                AppTheme.secondaryColor.withValues(alpha: 0.5),
-                              ],
-                            ),
-                          ),
-                          child: AvatarWidget(
-                            avatarUrl: participant?.avatarUrl,
-                            radius: 70,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 32),
-
-              // Caller name
-              Text(
-                participant?.name ?? 'Unknown',
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-
-              const SizedBox(height: 8),
-
-              // Status text
-              Text(
-                isVideo ? 'is video calling you...' : 'is calling you...',
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 16,
-                ),
-              ),
+              // ── Call type badge ──
+              _buildCallTypeBadge(isVideo),
 
               const Spacer(flex: 2),
 
-              // Action buttons
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 48),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // Decline button
-                    _CallActionButton(
-                      icon: Icons.call_end,
-                      color: AppTheme.errorColor,
-                      label: 'Decline',
-                      onTap: _declineCall,
-                    ),
+              // ── Avatar with ring animation ──
+              _buildAvatarSection(participant),
 
-                    // Accept button
-                    _CallActionButton(
-                      icon: isVideo ? Icons.videocam : Icons.call,
-                      color: AppTheme.successColor,
-                      label: 'Accept',
-                      onTap: _acceptCall,
-                    ),
-                  ],
+              const SizedBox(height: 28),
+
+              // ── Name ──
+              Text(
+                participant?.name ?? 'Unknown',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // ── Status ──
+              Text(
+                isVideo ? 'Video calling you...' : 'Calling you...',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
                 ),
               ),
 
-              const SizedBox(height: 60),
+              const Spacer(flex: 3),
+
+              // ── Accept / Decline buttons ──
+              SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.5),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(
+                  parent: _slideController,
+                  curve: Curves.easeOutCubic,
+                )),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 48),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      // Decline
+                      _IncomingCallAction(
+                        icon: Icons.call_end_rounded,
+                        gradient: const [Color(0xFFEF4444), Color(0xFFDC2626)],
+                        label: 'Decline',
+                        onTap: _decline,
+                      ),
+                      // Accept
+                      _IncomingCallAction(
+                        icon: isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+                        gradient: const [Color(0xFF34D399), Color(0xFF10B981)],
+                        label: 'Accept',
+                        onTap: _accept,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              SizedBox(height: mq.padding.bottom + 40),
             ],
           ),
         ),
       ),
     );
   }
+
+  Widget _buildCallTypeBadge(bool isVideo) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isVideo ? Icons.videocam_rounded : Icons.phone_rounded,
+            color: AppTheme.primaryColor,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isVideo ? 'Incoming video call' : 'Incoming voice call',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.7),
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAvatarSection(CallParticipant? participant) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // Animated ripple rings
+        AnimatedBuilder(
+          animation: _ringAnimation,
+          builder: (context, _) {
+            return Stack(
+              alignment: Alignment.center,
+              children: [
+                _buildRipple(_ringAnimation.value),
+                _buildRipple((_ringAnimation.value + 0.33) % 1.0),
+                _buildRipple((_ringAnimation.value + 0.66) % 1.0),
+              ],
+            );
+          },
+        ),
+        // Pulsing avatar
+        AnimatedBuilder(
+          animation: _pulseAnimation,
+          builder: (context, _) {
+            return Transform.scale(
+              scale: _pulseAnimation.value,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [
+                      AppTheme.primaryColor.withValues(alpha: 0.5),
+                      AppTheme.secondaryColor.withValues(alpha: 0.5),
+                    ],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.primaryColor.withValues(alpha: 0.3),
+                      blurRadius: 30,
+                      spreadRadius: 5,
+                    ),
+                  ],
+                ),
+                child: AvatarWidget(
+                  avatarUrl: participant?.avatarUrl,
+                  radius: 70,
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRipple(double progress) {
+    return Container(
+      width: 180 + (80 * progress),
+      height: 180 + (80 * progress),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: AppTheme.primaryColor.withValues(alpha: 0.25 * (1 - progress)),
+          width: 2,
+        ),
+      ),
+    );
+  }
 }
 
-/// Call action button (accept/decline)
-class _CallActionButton extends StatelessWidget {
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _IncomingCallAction extends StatelessWidget {
   final IconData icon;
-  final Color color;
+  final List<Color> gradient;
   final String label;
   final VoidCallback onTap;
 
-  const _CallActionButton({
+  const _IncomingCallAction({
     required this.icon,
-    required this.color,
+    required this.gradient,
     required this.label,
     required this.onTap,
   });
@@ -310,29 +327,26 @@ class _CallActionButton extends StatelessWidget {
             width: 72,
             height: 72,
             decoration: BoxDecoration(
-              color: color,
+              gradient: LinearGradient(colors: gradient),
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: color.withValues(alpha: 0.4),
-                  blurRadius: 16,
+                  color: gradient.first.withValues(alpha: 0.4),
+                  blurRadius: 20,
                   spreadRadius: 2,
                 ),
               ],
             ),
-            child: Icon(
-              icon,
-              color: Colors.white,
-              size: 32,
-            ),
+            child: Icon(icon, color: Colors.white, size: 32),
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Text(
           label,
-          style: const TextStyle(
-            color: AppTheme.textSecondary,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.7),
             fontSize: 14,
+            fontWeight: FontWeight.w500,
           ),
         ),
       ],
