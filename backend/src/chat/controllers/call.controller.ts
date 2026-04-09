@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../index';
 import { BadRequestError } from '../../common/utils/AppError';
+import { logger } from '../../common/utils/logger';
 
 export class CallController {
   /**
@@ -62,11 +63,17 @@ export class CallController {
     try {
       if (!req.user) throw new BadRequestError('Auth required');
 
+      const username = process.env.TURN_USERNAME;
+      const credential = process.env.TURN_CREDENTIAL;
+
+      if (!username || !credential) {
+        logger.warn('[CALL] TURN credentials requested but env vars not set');
+        return res.status(503).json({ error: 'TURN server not configured' });
+      }
+
       // Time-limited credentials (valid for 24 hours)
       const ttl = 86400; // 24 hours in seconds
       const expiry = Math.floor(Date.now() / 1000) + ttl;
-      const username = process.env.TURN_USERNAME || 'e8dd65a92f3c1be0f5b4a790';
-      const credential = process.env.TURN_CREDENTIAL || 'sFAnOL6g5jXBbkGi';
 
       const iceServers = [
         { urls: 'stun:stun.l.google.com:19302' },

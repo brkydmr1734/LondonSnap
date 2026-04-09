@@ -70,7 +70,9 @@ class _LondonSnapsAppState extends State<LondonSnapsApp> with WidgetsBindingObse
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _callProvider.init();
+
+    // Initialize chat (connects socket) and call system early
+    _chatProvider.init();
     _callProvider.addListener(_onCallStateChanged);
     
     // Initialize safety walk provider - load active walk if any

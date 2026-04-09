@@ -192,6 +192,10 @@ class ChatProvider extends ChangeNotifier {
       case SocketEventType.callOffer:
       case SocketEventType.callAnswer:
       case SocketEventType.callIceCandidate:
+      case SocketEventType.callBusy:
+      case SocketEventType.callBlocked:
+      case SocketEventType.callError:
+      case SocketEventType.callStateSync:
         break;
     }
   }

@@ -1,10 +1,48 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:londonsnaps/core/api/api_service.dart';
+import 'package:londonsnaps/core/config/app_config.dart';
 import 'package:londonsnaps/features/discover/models/discover_models.dart';
 import 'package:londonsnaps/features/map/models/map_models.dart';
 import 'package:londonsnaps/features/map/models/poi_models.dart';
+
+/// Route info returned from Mapbox Directions API
+class MapRouteInfo {
+  final List<LatLng> polylinePoints;
+  final double distanceMeters;
+  final double durationSeconds;
+  final LatLng destination;
+  final String destinationName;
+
+  const MapRouteInfo({
+    required this.polylinePoints,
+    required this.distanceMeters,
+    required this.durationSeconds,
+    required this.destination,
+    required this.destinationName,
+  });
+
+  String get formattedDistance {
+    if (distanceMeters >= 1000) {
+      return '${(distanceMeters / 1000).toStringAsFixed(1)} km';
+    }
+    return '${distanceMeters.round()} m';
+  }
+
+  String get formattedDuration {
+    final minutes = (durationSeconds / 60).round();
+    if (minutes >= 60) {
+      final hours = minutes ~/ 60;
+      final mins = minutes % 60;
+      return '${hours}h ${mins}min';
+    }
+    return '$minutes min';
+  }
+}
 
 enum MapFilter { all, friends, events }
 
@@ -19,6 +57,8 @@ class SnapMapState {
   final Set<PoiCategory> activePoiFilters;
   final bool showPois;
   final bool ghostMode;
+  final MapRouteInfo? activeRoute;
+  final bool isLoadingRoute;
 
   const SnapMapState({
     this.userLocation,
@@ -31,6 +71,8 @@ class SnapMapState {
     this.activePoiFilters = const {},
     this.showPois = true,
     this.ghostMode = false,
+    this.activeRoute,
+    this.isLoadingRoute = false,
   });
 
   List<Object> get visiblePins {
@@ -64,6 +106,9 @@ class SnapMapState {
     Set<PoiCategory>? activePoiFilters,
     bool? showPois,
     bool? ghostMode,
+    MapRouteInfo? activeRoute,
+    bool clearRoute = false,
+    bool? isLoadingRoute,
   }) {
     return SnapMapState(
       userLocation: userLocation ?? this.userLocation,
@@ -76,6 +121,8 @@ class SnapMapState {
       activePoiFilters: activePoiFilters ?? this.activePoiFilters,
       showPois: showPois ?? this.showPois,
       ghostMode: ghostMode ?? this.ghostMode,
+      activeRoute: clearRoute ? null : (activeRoute ?? this.activeRoute),
+      isLoadingRoute: isLoadingRoute ?? this.isLoadingRoute,
     );
   }
 }
@@ -277,6 +324,71 @@ class SnapMapNotifier extends StateNotifier<SnapMapState> {
   Future<void> relocate() async {
     state = state.copyWith(isLocating: true);
     await _requestLocationAndLoad();
+  }
+
+  /// Fetch walking directions from Mapbox Directions API
+  Future<void> fetchDirections(LatLng destination, String destinationName) async {
+    if (state.userLocation == null) return;
+
+    state = state.copyWith(isLoadingRoute: true);
+
+    try {
+      final origin = state.userLocation!;
+      final url = Uri.parse(
+        'https://api.mapbox.com/directions/v5/mapbox/walking/'
+        '${origin.longitude},${origin.latitude};'
+        '${destination.longitude},${destination.latitude}'
+        '?geometries=geojson&overview=full&access_token=${AppConfig.mapboxAccessToken}',
+      );
+
+      final response = await http.get(url);
+
+      if (response.statusCode != 200) {
+        debugPrint('[Map] Directions API error: ${response.statusCode}');
+        state = state.copyWith(isLoadingRoute: false);
+        return;
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final routes = json['routes'] as List?;
+
+      if (routes == null || routes.isEmpty) {
+        debugPrint('[Map] No routes found');
+        state = state.copyWith(isLoadingRoute: false);
+        return;
+      }
+
+      final route = routes[0] as Map<String, dynamic>;
+      final geometry = route['geometry'] as Map<String, dynamic>;
+      final coordinates = geometry['coordinates'] as List;
+      final distance = (route['distance'] as num).toDouble();
+      final duration = (route['duration'] as num).toDouble();
+
+      // Convert [lng, lat] pairs to LatLng
+      final points = coordinates.map<LatLng>((coord) {
+        final c = coord as List;
+        return LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble());
+      }).toList();
+
+      state = state.copyWith(
+        activeRoute: MapRouteInfo(
+          polylinePoints: points,
+          distanceMeters: distance,
+          durationSeconds: duration,
+          destination: destination,
+          destinationName: destinationName,
+        ),
+        isLoadingRoute: false,
+      );
+    } catch (e) {
+      debugPrint('[Map] Directions error: $e');
+      state = state.copyWith(isLoadingRoute: false);
+    }
+  }
+
+  /// Clear the active route
+  void clearRoute() {
+    state = state.copyWith(clearRoute: true);
   }
 }
 

@@ -309,28 +309,42 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       return;
     }
 
+    // Ensure socket is connected before starting call
     if (!_chatProvider.isSocketConnected) {
+      // ignore: avoid_print
+      print('[Call] Socket not connected, attempting reconnect...');
       _chatProvider.reconnectSocket();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Connecting to server...')),
       );
-      // Wait for connection with a single timeout instead of blocking loop
-      final connected = await Future.any([
-        Future.doWhile(() async {
-          await Future.delayed(const Duration(milliseconds: 100));
-          return !_chatProvider.isSocketConnected;
-        }).then((_) => true),
-        Future.delayed(const Duration(seconds: 5), () => false),
-      ]);
+      // Wait for connection with timeout
+      bool connected = false;
+      for (int i = 0; i < 50; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        if (_chatProvider.isSocketConnected) {
+          connected = true;
+          break;
+        }
+      }
       if (!mounted) return;
       if (!connected) {
+        // ignore: avoid_print
+        print('[Call] Socket connection FAILED after 5s timeout');
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not connect. Check your internet and try again.')),
+          const SnackBar(
+            content: Text('Could not connect to server. Check your internet and try again.'),
+            backgroundColor: Colors.red,
+          ),
         );
         return;
       }
+      // ignore: avoid_print
+      print('[Call] Socket reconnected successfully');
     }
+
+    // ignore: avoid_print
+    print('[Call] Initiating ${isVideo ? 'video' : 'voice'} call to ${participant.user.displayName}');
 
     _callProvider.initiateCall(
       targetUserId: participant.user.id,

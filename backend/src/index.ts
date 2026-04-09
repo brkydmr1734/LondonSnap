@@ -162,6 +162,9 @@ websocketService.initialize(httpServer, corsOrigins);
 const gracefulShutdown = async () => {
   console.log('Received shutdown signal. Closing connections...');
   
+  // Stop stale call cleanup interval
+  websocketService.stopStaleCallCleanup();
+
   await prisma.$disconnect();
   redis.disconnect();
   

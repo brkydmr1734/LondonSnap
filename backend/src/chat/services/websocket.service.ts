@@ -64,6 +64,7 @@ const EVENTS = {
   CALL_ACCEPT: 'call_accept',
   CALL_DECLINE: 'call_decline',
   CALL_END: 'call_end',
+  CALL_CANCEL: 'call_cancel',
   CALL_OFFER: 'call_offer',
   CALL_ANSWER: 'call_answer',
   CALL_ICE_CANDIDATE: 'call_ice_candidate',
@@ -74,7 +75,14 @@ const EVENTS = {
   CALL_DECLINED: 'call_declined',
   CALL_ENDED: 'call_ended',
   CALL_MISSED: 'call_missed',
+  CALL_BUSY: 'call_busy',
+  CALL_BLOCKED: 'call_blocked',
+  CALL_STATE_SYNC: 'call_state_sync',
+  CALL_ERROR: 'call_error',
 } as const;
+
+// Stale call cleanup interval (cleared on shutdown)
+let staleCallCleanupInterval: NodeJS.Timeout | null = null;
 
 class WebSocketService {
   private io: Server | null = null;
@@ -95,6 +103,12 @@ class WebSocketService {
 
     this.io.use(this.authMiddleware.bind(this));
     this.setupEventHandlers();
+    this.startStaleCallCleanup();
+
+    // Warn if TURN env vars are missing
+    if (!process.env.TURN_USERNAME || !process.env.TURN_CREDENTIAL) {
+      logger.warn('[CALL] TURN_USERNAME or TURN_CREDENTIAL not set - calls may fail behind NAT');
+    }
 
     logger.info('WebSocket server initialized');
     return this.io;
@@ -194,6 +208,9 @@ class WebSocketService {
       // Broadcast user online status
       this.broadcastUserStatus(userId, true);
 
+      // Sync active call state on reconnection
+      this.syncCallStateOnReconnect(authSocket);
+
       // Update user online status in DB (fire-and-forget)
       prisma.user.update({
         where: { id: userId },
@@ -208,14 +225,15 @@ class WebSocketService {
       socket.on(EVENTS.JOIN_CHAT, (data) => this.handleJoinChat(authSocket, data));
       socket.on(EVENTS.LEAVE_CHAT, (data) => this.handleLeaveChat(authSocket, data));
       
-      // Call event handlers
-      socket.on(EVENTS.CALL_INITIATE, (data) => this.handleCallInitiate(authSocket, data));
-      socket.on(EVENTS.CALL_ACCEPT, (data) => this.handleCallAccept(authSocket, data));
-      socket.on(EVENTS.CALL_DECLINE, (data) => this.handleCallDecline(authSocket, data));
-      socket.on(EVENTS.CALL_END, (data) => this.handleCallEnd(authSocket, data));
-      socket.on(EVENTS.CALL_OFFER, (data) => this.handleCallOffer(authSocket, data));
-      socket.on(EVENTS.CALL_ANSWER, (data) => this.handleCallAnswer(authSocket, data));
-      socket.on(EVENTS.CALL_ICE_CANDIDATE, (data) => this.handleCallIceCandidate(authSocket, data));
+      // Call event handlers (each wrapped with safe error handling)
+      socket.on(EVENTS.CALL_INITIATE, (data) => this.safeCallHandler('call_initiate', authSocket, data, (s, d) => this.handleCallInitiate(s, d)));
+      socket.on(EVENTS.CALL_ACCEPT, (data) => this.safeCallHandler('call_accept', authSocket, data, (s, d) => this.handleCallAccept(s, d)));
+      socket.on(EVENTS.CALL_DECLINE, (data) => this.safeCallHandler('call_decline', authSocket, data, (s, d) => this.handleCallDecline(s, d)));
+      socket.on(EVENTS.CALL_END, (data) => this.safeCallHandler('call_end', authSocket, data, (s, d) => this.handleCallEnd(s, d)));
+      socket.on(EVENTS.CALL_CANCEL, (data) => this.safeCallHandler('call_cancel', authSocket, data, (s, d) => this.handleCallCancel(s, d)));
+      socket.on(EVENTS.CALL_OFFER, (data) => this.safeCallHandler('call_offer', authSocket, data, (s, d) => this.handleCallOffer(s, d)));
+      socket.on(EVENTS.CALL_ANSWER, (data) => this.safeCallHandler('call_answer', authSocket, data, (s, d) => this.handleCallAnswer(s, d)));
+      socket.on(EVENTS.CALL_ICE_CANDIDATE, (data) => this.safeCallHandler('call_ice_candidate', authSocket, data, (s, d) => this.handleCallIceCandidate(s, d)));
 
       // Disconnect handler
       socket.on('disconnect', () => this.handleDisconnect(authSocket));
@@ -277,10 +295,104 @@ class WebSocketService {
             startedAt: call.startTime,
             endedAt: new Date(),
           },
-        }).catch((err: any) => logger.error('Failed to log interrupted call:', err));
+        }).catch((err: any) => logger.error('[CALL] Failed to log interrupted call:', err));
         
-        logger.info(`Call ${callId} ended due to user ${userId} disconnect`);
+        logger.info(`[CALL] Call ended: callId=${callId}, duration=${duration}s (user ${userId} disconnected)`);
       }
+    }
+  }
+
+  /**
+   * Top-level error wrapper for all call socket event handlers.
+   * Catches unhandled errors, logs them, emits call_error, and attempts graceful cleanup.
+   */
+  private async safeCallHandler(
+    eventName: string,
+    socket: AuthenticatedSocket,
+    data: any,
+    handler: (socket: AuthenticatedSocket, data: any) => void | Promise<void>,
+  ): Promise<void> {
+    try {
+      await handler(socket, data);
+    } catch (error) {
+      const callId = data?.callId as string | undefined;
+      logger.error(`[CALL] Error in ${eventName} handler:`, error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: callId ?? null, error: 'Internal server error' });
+
+      // If this was during an active call, try to gracefully end it
+      if (callId) {
+        const call = activeCalls.get(callId);
+        if (call) {
+          const otherUserId = call.callerId === socket.user.id ? call.targetId : call.callerId;
+          const duration = Math.floor((Date.now() - call.startTime.getTime()) / 1000);
+          this.emitToUser(otherUserId, EVENTS.CALL_ENDED, { callId, duration });
+          const timeout = callTimeouts.get(callId);
+          if (timeout) { clearTimeout(timeout); callTimeouts.delete(callId); }
+          activeCalls.delete(callId);
+          prisma.callLog.create({
+            data: {
+              callerId: call.callerId,
+              receiverId: call.targetId,
+              callType: call.callType === 'voice' ? 'VOICE' : 'VIDEO',
+              status: 'FAILED',
+              duration,
+              startedAt: call.startTime,
+              endedAt: new Date(),
+            },
+          }).catch((err: any) => logger.error('[CALL] Failed to log error-cleanup call:', err));
+          logger.warn(`[CALL] Gracefully ended call ${callId} after error in ${eventName}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Start periodic cleanup of stale calls (>5 minutes active).
+   * Runs every 60 seconds.
+   */
+  private startStaleCallCleanup(): void {
+    staleCallCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [callId, call] of Array.from(activeCalls.entries())) {
+        const seconds = Math.floor((now - call.startTime.getTime()) / 1000);
+        if (seconds > 300) {
+          logger.warn(`[CALL] Cleaning stale call ${callId}, duration: ${seconds}s`);
+
+          // Notify both parties
+          this.emitToUser(call.callerId, EVENTS.CALL_ENDED, { callId, reason: 'timeout' });
+          this.emitToUser(call.targetId, EVENTS.CALL_ENDED, { callId, reason: 'timeout' });
+
+          // Clear timeout
+          const timeout = callTimeouts.get(callId);
+          if (timeout) { clearTimeout(timeout); callTimeouts.delete(callId); }
+
+          // Log to DB as FAILED
+          prisma.callLog.create({
+            data: {
+              callerId: call.callerId,
+              receiverId: call.targetId,
+              callType: call.callType === 'voice' ? 'VOICE' : 'VIDEO',
+              status: 'FAILED',
+              duration: seconds,
+              startedAt: call.startTime,
+              endedAt: new Date(),
+            },
+          }).catch((err: any) => logger.error('[CALL] Failed to log stale call:', err));
+
+          activeCalls.delete(callId);
+        }
+      }
+    }, 60_000);
+  }
+
+  /**
+   * Stop the stale call cleanup interval (called on shutdown).
+   */
+  stopStaleCallCleanup(): void {
+    if (staleCallCleanupInterval) {
+      clearInterval(staleCallCleanupInterval);
+      staleCallCleanupInterval = null;
+      logger.info('[CALL] Stale call cleanup interval cleared');
     }
   }
 
@@ -514,6 +626,50 @@ class WebSocketService {
         return;
       }
 
+      // Block check: deny if either party has blocked the other
+      const blockExists = await prisma.block.findFirst({
+        where: {
+          OR: [
+            { blockerId: callerId, blockedId: targetUserId },
+            { blockerId: targetUserId, blockedId: callerId },
+          ],
+        },
+      });
+
+      if (blockExists) {
+        // Generate callId so client can match the response
+        const callId = uuidv4();
+        socket.emit(EVENTS.CALL_BLOCKED, { callId });
+        logger.info(`Call blocked between ${callerId} and ${targetUserId}`);
+        return;
+      }
+
+      // Busy check: deny if CALLER is already in an active call
+      const callerInCall = Array.from(activeCalls.values()).some(
+        (c) => c.callerId === callerId || c.targetId === callerId
+      );
+
+      if (callerInCall) {
+        const callId = uuidv4();
+        socket.emit(EVENTS.CALL_BUSY, { callId });
+        logger.info(`[CALL] Call from ${callerId} rejected: caller already in active call`);
+        return;
+      }
+
+      // Busy check: deny if target is already in an active call
+      const targetInCall = Array.from(activeCalls.values()).some(
+        (c) => c.callerId === targetUserId || c.targetId === targetUserId
+      );
+
+      if (targetInCall) {
+        const callId = uuidv4();
+        socket.emit('call_initiated', { callId });
+        // Immediately tell caller the target is busy
+        socket.emit(EVENTS.CALL_BUSY, { callId });
+        logger.info(`[CALL] Call to ${targetUserId} rejected: user is busy`);
+        return;
+      }
+
       // Generate unique call ID
       const callId = uuidv4();
 
@@ -528,7 +684,7 @@ class WebSocketService {
       };
       activeCalls.set(callId, call);
 
-      logger.info(`Call initiated: ${callId} from ${callerId} to ${targetUserId} (${callType})`);
+      logger.info(`[CALL] Call initiated: callId=${callId}, caller=${callerId}, target=${targetUserId}, type=${callType}`);
 
       // Check if target user is online
       const isTargetOnline = this.isUserOnline(targetUserId);
@@ -580,7 +736,7 @@ class WebSocketService {
             },
           }).catch((err: any) => logger.error('Failed to log missed call:', err));
           
-          logger.info(`Call ${callId} missed (timeout)`);
+          logger.info(`[CALL] Call missed: callId=${callId}`);
         }
       }, 30000);
 
@@ -589,8 +745,8 @@ class WebSocketService {
       // Acknowledge call initiation to caller
       socket.emit('call_initiated', { callId });
     } catch (error) {
-      logger.error('Error initiating call:', error);
-      socket.emit(EVENTS.ERROR, { message: 'Failed to initiate call' });
+      logger.error('[CALL] Error in call_initiate handler:', error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: null, error: 'Internal server error' });
     }
   }
 
@@ -612,13 +768,13 @@ class WebSocketService {
 
       const call = activeCalls.get(callId);
       if (!call) {
-        socket.emit(EVENTS.ERROR, { message: 'Call not found or already ended' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Call not found or expired' });
         return;
       }
 
       // Verify user is the target of the call
       if (call.targetId !== userId) {
-        socket.emit(EVENTS.ERROR, { message: 'Not authorized to accept this call' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Not authorized to accept this call' });
         return;
       }
 
@@ -632,10 +788,10 @@ class WebSocketService {
       // Emit call accepted to caller
       this.emitToUser(call.callerId, EVENTS.CALL_ACCEPTED, { callId });
 
-      logger.info(`Call ${callId} accepted by ${userId}`);
+      logger.info(`[CALL] Call accepted: callId=${callId}`);
     } catch (error) {
-      logger.error('Error accepting call:', error);
-      socket.emit(EVENTS.ERROR, { message: 'Failed to accept call' });
+      logger.error(`[CALL] Error in call_accept handler:`, error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });
     }
   }
 
@@ -657,13 +813,13 @@ class WebSocketService {
 
       const call = activeCalls.get(callId);
       if (!call) {
-        socket.emit(EVENTS.ERROR, { message: 'Call not found or already ended' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Call not found or expired' });
         return;
       }
 
       // Verify user is the target of the call
       if (call.targetId !== userId) {
-        socket.emit(EVENTS.ERROR, { message: 'Not authorized to decline this call' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Not authorized to decline this call' });
         return;
       }
 
@@ -692,10 +848,70 @@ class WebSocketService {
         },
       }).catch((err: any) => logger.error('Failed to log declined call:', err));
 
-      logger.info(`Call ${callId} declined by ${userId}`);
+      logger.info(`[CALL] Call declined: callId=${callId}`);
     } catch (error) {
-      logger.error('Error declining call:', error);
-      socket.emit(EVENTS.ERROR, { message: 'Failed to decline call' });
+      logger.error(`[CALL] Error in call_decline handler:`, error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Handle call cancel (caller cancels during ringing phase)
+   */
+  private handleCallCancel(
+    socket: AuthenticatedSocket,
+    data: { callId: string }
+  ): void {
+    try {
+      const { callId } = data;
+      const userId = socket.user.id;
+
+      if (!callId) {
+        socket.emit(EVENTS.ERROR, { message: 'callId is required' });
+        return;
+      }
+
+      const call = activeCalls.get(callId);
+      if (!call) {
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Call not found or expired' });
+        return;
+      }
+
+      // Verify user is the caller (only caller can cancel)
+      if (call.callerId !== userId) {
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Not authorized to cancel this call' });
+        return;
+      }
+
+      // Clear the timeout timer
+      const timeout = callTimeouts.get(callId);
+      if (timeout) {
+        clearTimeout(timeout);
+        callTimeouts.delete(callId);
+      }
+
+      // Emit call ended to the target (so their ringing stops)
+      this.emitToUser(call.targetId, EVENTS.CALL_ENDED, { callId, duration: 0 });
+
+      // Remove call from active calls
+      activeCalls.delete(callId);
+
+      // Log cancelled call
+      prisma.callLog.create({
+        data: {
+          callerId: call.callerId,
+          receiverId: call.targetId,
+          callType: call.callType === 'voice' ? 'VOICE' : 'VIDEO',
+          status: 'MISSED',
+          duration: 0,
+          endedAt: new Date(),
+        },
+      }).catch((err: any) => logger.error('Failed to log cancelled call:', err));
+
+      logger.info(`[CALL] Call cancelled: callId=${callId}, by=${userId}`);
+    } catch (error) {
+      logger.error(`[CALL] Error in call_cancel handler:`, error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });
     }
   }
 
@@ -717,13 +933,13 @@ class WebSocketService {
 
       const call = activeCalls.get(callId);
       if (!call) {
-        // Call might already be ended, silently return
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Call not found or expired' });
         return;
       }
 
       // Verify user is part of the call
       if (call.callerId !== userId && call.targetId !== userId) {
-        socket.emit(EVENTS.ERROR, { message: 'Not authorized to end this call' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Not authorized to end this call' });
         return;
       }
 
@@ -759,10 +975,10 @@ class WebSocketService {
         },
       }).catch((err: any) => logger.error('Failed to log completed call:', err));
 
-      logger.info(`Call ${callId} ended by ${userId}, duration: ${duration}s`);
+      logger.info(`[CALL] Call ended: callId=${callId}, duration=${duration}s`);
     } catch (error) {
-      logger.error('Error ending call:', error);
-      socket.emit(EVENTS.ERROR, { message: 'Failed to end call' });
+      logger.error(`[CALL] Error in call_end handler:`, error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });
     }
   }
 
@@ -784,13 +1000,13 @@ class WebSocketService {
 
       const call = activeCalls.get(callId);
       if (!call) {
-        socket.emit(EVENTS.ERROR, { message: 'Call not found' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Call not found or expired' });
         return;
       }
 
       // Verify user is part of the call
       if (call.callerId !== userId && call.targetId !== userId) {
-        socket.emit(EVENTS.ERROR, { message: 'Not authorized for this call' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Not authorized for this call' });
         return;
       }
 
@@ -798,10 +1014,10 @@ class WebSocketService {
       const otherUserId = call.callerId === userId ? call.targetId : call.callerId;
       this.emitToUser(otherUserId, EVENTS.CALL_OFFER, { callId, sdp });
 
-      logger.debug(`Call ${callId}: SDP offer relayed from ${userId} to ${otherUserId}`);
+      logger.info(`[CALL] SDP offer relayed: callId=${callId}`);
     } catch (error) {
-      logger.error('Error relaying call offer:', error);
-      socket.emit(EVENTS.ERROR, { message: 'Failed to relay offer' });
+      logger.error(`[CALL] Error in call_offer handler:`, error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });
     }
   }
 
@@ -823,23 +1039,23 @@ class WebSocketService {
 
       const call = activeCalls.get(callId);
       if (!call) {
-        socket.emit(EVENTS.ERROR, { message: 'Call not found' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Call not found or expired' });
         return;
       }
 
       // Verify user is part of the call
       if (call.callerId !== userId && call.targetId !== userId) {
-        socket.emit(EVENTS.ERROR, { message: 'Not authorized for this call' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Not authorized for this call' });
         return;
       }
 
       // Relay answer to the caller
       this.emitToUser(call.callerId, EVENTS.CALL_ANSWER, { callId, sdp });
 
-      logger.debug(`Call ${callId}: SDP answer relayed from ${userId} to ${call.callerId}`);
+      logger.info(`[CALL] SDP answer relayed: callId=${callId}`);
     } catch (error) {
-      logger.error('Error relaying call answer:', error);
-      socket.emit(EVENTS.ERROR, { message: 'Failed to relay answer' });
+      logger.error(`[CALL] Error in call_answer handler:`, error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });
     }
   }
 
@@ -861,13 +1077,13 @@ class WebSocketService {
 
       const call = activeCalls.get(callId);
       if (!call) {
-        // Call might have ended, silently return
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Call not found or expired' });
         return;
       }
 
       // Verify user is part of the call
       if (call.callerId !== userId && call.targetId !== userId) {
-        socket.emit(EVENTS.ERROR, { message: 'Not authorized for this call' });
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Not authorized for this call' });
         return;
       }
 
@@ -875,10 +1091,36 @@ class WebSocketService {
       const otherUserId = call.callerId === userId ? call.targetId : call.callerId;
       this.emitToUser(otherUserId, EVENTS.CALL_ICE_CANDIDATE, { callId, candidate });
 
-      logger.debug(`Call ${callId}: ICE candidate relayed from ${userId} to ${otherUserId}`);
+      logger.info(`[CALL] ICE candidate relayed: callId=${callId}`);
     } catch (error) {
-      logger.error('Error relaying ICE candidate:', error);
-      socket.emit(EVENTS.ERROR, { message: 'Failed to relay ICE candidate' });
+      logger.error(`[CALL] Error in call_ice_candidate handler:`, error);
+      socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Sync active call state when a user reconnects.
+   * If the user is part of an active call, inform them so the client can recover.
+   */
+  private syncCallStateOnReconnect(socket: AuthenticatedSocket): void {
+    const userId = socket.user.id;
+
+    for (const [callId, call] of Array.from(activeCalls.entries())) {
+      if (call.callerId === userId || call.targetId === userId) {
+        const otherUserId = call.callerId === userId ? call.targetId : call.callerId;
+        const isInitiator = call.callerId === userId;
+
+        socket.emit(EVENTS.CALL_STATE_SYNC, {
+          callId,
+          callType: call.callType,
+          otherUserId,
+          isInitiator,
+          startTime: call.startTime.toISOString(),
+        });
+
+        logger.info(`Synced active call ${callId} state to reconnected user ${userId}`);
+        break; // A user can only be in one call
+      }
     }
   }
 

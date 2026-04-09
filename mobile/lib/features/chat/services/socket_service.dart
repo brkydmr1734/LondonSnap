@@ -33,6 +33,7 @@ class SocketEvents {
   static const String callAccept = 'call_accept';
   static const String callDecline = 'call_decline';
   static const String callEnd = 'call_end';
+  static const String callCancel = 'call_cancel';
   static const String callOffer = 'call_offer';
   static const String callAnswer = 'call_answer';
   static const String callIceCandidate = 'call_ice_candidate';
@@ -44,6 +45,10 @@ class SocketEvents {
   static const String callDeclined = 'call_declined';
   static const String callEnded = 'call_ended';
   static const String callMissed = 'call_missed';
+  static const String callBusy = 'call_busy';
+  static const String callBlocked = 'call_blocked';
+  static const String callStateSync = 'call_state_sync';
+  static const String callError = 'call_error';
 }
 
 /// Typing user info from socket event
@@ -174,6 +179,50 @@ class CallIceCandidateEvent {
   }
 }
 
+/// Call error event data
+class CallErrorEvent {
+  final String? callId;
+  final String error;
+
+  CallErrorEvent({this.callId, required this.error});
+
+  factory CallErrorEvent.fromJson(Map<String, dynamic> json) {
+    return CallErrorEvent(
+      callId: json['callId'] as String?,
+      error: json['error'] as String? ?? 'Unknown error',
+    );
+  }
+}
+
+/// Call state sync event data (reconnection recovery)
+class CallStateSyncEvent {
+  final String callId;
+  final String callType;
+  final String otherUserId;
+  final bool isInitiator;
+  final String startTime;
+
+  CallStateSyncEvent({
+    required this.callId,
+    required this.callType,
+    required this.otherUserId,
+    required this.isInitiator,
+    required this.startTime,
+  });
+
+  factory CallStateSyncEvent.fromJson(Map<String, dynamic> json) {
+    return CallStateSyncEvent(
+      callId: json['callId'] ?? '',
+      callType: json['callType'] ?? 'voice',
+      otherUserId: json['otherUserId'] ?? '',
+      isInitiator: json['isInitiator'] ?? false,
+      startTime: json['startTime'] ?? '',
+    );
+  }
+
+  bool get isVideoCall => callType == 'video';
+}
+
 /// Snap status update event data
 class SnapStatusUpdateEvent {
   final String chatId;
@@ -229,6 +278,10 @@ enum SocketEventType {
   callOffer,
   callAnswer,
   callIceCandidate,
+  callBusy,
+  callBlocked,
+  callError,
+  callStateSync,
 }
 
 class SocketEvent {
@@ -517,9 +570,15 @@ class ChatSocketService extends ChangeNotifier {
   void _setupCallListeners() {
     if (_socket == null) return;
 
+    // Always-on call logging (works in production)
+    void callLog(String msg) {
+      // ignore: avoid_print
+      print('[Socket/Call] $msg');
+    }
+
     // Call initiated acknowledgment
     _socket!.on(SocketEvents.callInitiated, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Call initiated: $data');
+      callLog('call_initiated received: $data');
       final callId = data['callId'] as String?;
       if (callId != null) {
         _eventController.add(SocketEvent(SocketEventType.callInitiated, callId));
@@ -528,18 +587,18 @@ class ChatSocketService extends ChangeNotifier {
 
     // Incoming call
     _socket!.on(SocketEvents.callIncoming, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Incoming call: $data');
+      callLog('call_incoming received: $data');
       try {
         final event = IncomingCallEvent.fromJson(data as Map<String, dynamic>);
         _eventController.add(SocketEvent(SocketEventType.callIncoming, event));
       } catch (e) {
-        if (AppConfig.isDev) debugPrint('[SOCKET] Error parsing incoming call: $e');
+        callLog('Error parsing incoming call: $e');
       }
     });
 
     // Call accepted
     _socket!.on(SocketEvents.callAccepted, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Call accepted: $data');
+      callLog('call_accepted received: $data');
       final callId = data['callId'] as String?;
       if (callId != null) {
         _eventController.add(SocketEvent(SocketEventType.callAccepted, callId));
@@ -548,7 +607,7 @@ class ChatSocketService extends ChangeNotifier {
 
     // Call declined
     _socket!.on(SocketEvents.callDeclined, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Call declined: $data');
+      callLog('call_declined received: $data');
       final callId = data['callId'] as String?;
       if (callId != null) {
         _eventController.add(SocketEvent(SocketEventType.callDeclined, callId));
@@ -557,54 +616,94 @@ class ChatSocketService extends ChangeNotifier {
 
     // Call ended
     _socket!.on(SocketEvents.callEnded, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Call ended: $data');
+      callLog('call_ended received: $data');
       try {
         final event = CallEndedEvent.fromJson(data as Map<String, dynamic>);
         _eventController.add(SocketEvent(SocketEventType.callEnded, event));
       } catch (e) {
-        if (AppConfig.isDev) debugPrint('[SOCKET] Error parsing call ended: $e');
+        callLog('Error parsing call ended: $e');
       }
     });
 
     // Call missed
     _socket!.on(SocketEvents.callMissed, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Call missed: $data');
+      callLog('call_missed received: $data');
       final callId = data['callId'] as String?;
       if (callId != null) {
         _eventController.add(SocketEvent(SocketEventType.callMissed, callId));
       }
     });
 
+    // Call busy (target already in another call)
+    _socket!.on(SocketEvents.callBusy, (data) {
+      callLog('call_busy received: $data');
+      final callId = data['callId'] as String?;
+      if (callId != null) {
+        _eventController.add(SocketEvent(SocketEventType.callBusy, callId));
+      }
+    });
+
+    // Call blocked (block relationship exists)
+    _socket!.on(SocketEvents.callBlocked, (data) {
+      callLog('call_blocked received: $data');
+      final callId = data['callId'] as String?;
+      if (callId != null) {
+        _eventController.add(SocketEvent(SocketEventType.callBlocked, callId));
+      }
+    });
+
     // WebRTC SDP offer
     _socket!.on(SocketEvents.callOffer, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Call offer: $data');
+      callLog('call_offer received (callId=${data['callId']})');
       try {
         final event = CallSdpEvent.fromJson(data as Map<String, dynamic>);
         _eventController.add(SocketEvent(SocketEventType.callOffer, event));
       } catch (e) {
-        if (AppConfig.isDev) debugPrint('[SOCKET] Error parsing call offer: $e');
+        callLog('Error parsing call offer: $e');
       }
     });
 
     // WebRTC SDP answer
     _socket!.on(SocketEvents.callAnswer, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Call answer: $data');
+      callLog('call_answer received (callId=${data['callId']})');
       try {
         final event = CallSdpEvent.fromJson(data as Map<String, dynamic>);
         _eventController.add(SocketEvent(SocketEventType.callAnswer, event));
       } catch (e) {
-        if (AppConfig.isDev) debugPrint('[SOCKET] Error parsing call answer: $e');
+        callLog('Error parsing call answer: $e');
       }
     });
 
     // WebRTC ICE candidate
     _socket!.on(SocketEvents.callIceCandidate, (data) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] ICE candidate: $data');
+      callLog('call_ice_candidate received (callId=${data['callId']})');
       try {
         final event = CallIceCandidateEvent.fromJson(data as Map<String, dynamic>);
         _eventController.add(SocketEvent(SocketEventType.callIceCandidate, event));
       } catch (e) {
-        if (AppConfig.isDev) debugPrint('[SOCKET] Error parsing ICE candidate: $e');
+        callLog('Error parsing ICE candidate: $e');
+      }
+    });
+
+    // Call error from server
+    _socket!.on(SocketEvents.callError, (data) {
+      callLog('call_error received: $data');
+      try {
+        final event = CallErrorEvent.fromJson(data as Map<String, dynamic>);
+        _eventController.add(SocketEvent(SocketEventType.callError, event));
+      } catch (e) {
+        callLog('Error parsing call_error: $e');
+      }
+    });
+
+    // Call state sync (reconnection recovery)
+    _socket!.on(SocketEvents.callStateSync, (data) {
+      callLog('call_state_sync received: $data');
+      try {
+        final event = CallStateSyncEvent.fromJson(data as Map<String, dynamic>);
+        _eventController.add(SocketEvent(SocketEventType.callStateSync, event));
+      } catch (e) {
+        callLog('Error parsing call_state_sync: $e');
       }
     });
   }
@@ -813,6 +912,11 @@ class ChatSocketService extends ChangeNotifier {
   /// End an active call
   void endCall(String callId) {
     _socket?.emit(SocketEvents.callEnd, {'callId': callId});
+  }
+
+  /// Cancel an outgoing call (during ringing phase)
+  void cancelCall(String callId) {
+    _socket?.emit(SocketEvents.callCancel, {'callId': callId});
   }
 
   /// Send WebRTC SDP offer

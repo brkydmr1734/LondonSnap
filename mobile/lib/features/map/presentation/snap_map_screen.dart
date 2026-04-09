@@ -54,7 +54,22 @@ class _SnapMapScreenState extends ConsumerState<SnapMapScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _PoiDetailSheet(poi: poi),
+      builder: (_) => Consumer(
+        builder: (ctx, ref, _) => _PoiDetailSheet(
+          poi: poi,
+          onDirections: () {
+            Navigator.pop(ctx);
+            ref.read(snapMapProvider.notifier).fetchDirections(
+              poi.position,
+              poi.name,
+            );
+            // Animate to show the route
+            if (_mapReady) {
+              _mapController.move(poi.position, 14.5);
+            }
+          },
+        ),
+      ),
     );
   }
 
@@ -159,6 +174,45 @@ class _SnapMapScreenState extends ConsumerState<SnapMapScreen>
                             ))
                         .toList(),
                   ),
+                // Route polyline overlay
+                if (mapState.activeRoute != null)
+                  PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: mapState.activeRoute!.polylinePoints,
+                        color: const Color(0xFF4A90FF),
+                        strokeWidth: 5.0,
+                        borderColor: const Color(0xFF1A5CCC),
+                        borderStrokeWidth: 1.5,
+                      ),
+                    ],
+                  ),
+                // Route destination marker
+                if (mapState.activeRoute != null)
+                  MarkerLayer(
+                    markers: [
+                      Marker(
+                        point: mapState.activeRoute!.destination,
+                        width: 36,
+                        height: 36,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF4A90FF),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x664A90FF),
+                                blurRadius: 12,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          child: const Icon(Icons.flag_rounded, color: Colors.white, size: 18),
+                        ),
+                      ),
+                    ],
+                  ),
                 // Current user marker (always on top)
                 if (mapState.userLocation != null)
                   MarkerLayer(
@@ -250,6 +304,49 @@ class _SnapMapScreenState extends ConsumerState<SnapMapScreen>
               onSafetyWalkTap: () => _openSafetyWalkSheet(context),
             ),
           ),
+
+          // ── Route info overlay ──
+          if (mapState.activeRoute != null)
+            Positioned(
+              bottom: safeBottom + 90,
+              left: 16,
+              right: 72,
+              child: _RouteInfoPanel(
+                route: mapState.activeRoute!,
+                isLoading: mapState.isLoadingRoute,
+                onClose: () => ref.read(snapMapProvider.notifier).clearRoute(),
+              ),
+            ),
+          if (mapState.isLoadingRoute)
+            Positioned(
+              bottom: safeBottom + 100,
+              left: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                decoration: BoxDecoration(
+                  color: AppTheme.cardColor,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF4A90FF).withValues(alpha: 0.3)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(0xFF4A90FF),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Text(
+                      'Finding route...',
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           // ── Bottom friend avatars row (Snapchat-style) ──
           Positioned(
@@ -1591,7 +1688,8 @@ class _TrianglePainter extends CustomPainter {
 
 class _PoiDetailSheet extends StatelessWidget {
   final PoiPin poi;
-  const _PoiDetailSheet({required this.poi});
+  final VoidCallback onDirections;
+  const _PoiDetailSheet({required this.poi, required this.onDirections});
 
   @override
   Widget build(BuildContext context) {
@@ -1809,7 +1907,7 @@ class _PoiDetailSheet extends StatelessWidget {
                     const Spacer(),
                     // Directions button
                     GestureDetector(
-                      onTap: () => Navigator.pop(context),
+                      onTap: onDirections,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 9),
@@ -1852,6 +1950,125 @@ class _PoiDetailSheet extends StatelessWidget {
           ),
         ],
       ),
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// ROUTE INFO PANEL
+// ──────────────────────────────────────────────────────────────────
+
+class _RouteInfoPanel extends StatelessWidget {
+  final MapRouteInfo route;
+  final bool isLoading;
+  final VoidCallback onClose;
+
+  const _RouteInfoPanel({
+    required this.route,
+    required this.isLoading,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.cardColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF4A90FF).withValues(alpha: 0.3)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x664A90FF),
+            blurRadius: 16,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with close
+          Row(
+            children: [
+              const Icon(Icons.directions_walk_rounded, color: Color(0xFF4A90FF), size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  route.destinationName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              GestureDetector(
+                onTap: onClose,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close_rounded, color: Colors.white70, size: 18),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Distance and duration
+          Row(
+            children: [
+              _RouteInfoChip(
+                icon: Icons.straighten_rounded,
+                label: route.formattedDistance,
+              ),
+              const SizedBox(width: 10),
+              _RouteInfoChip(
+                icon: Icons.schedule_rounded,
+                label: route.formattedDuration,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteInfoChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _RouteInfoChip({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF4A90FF).withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF4A90FF).withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: const Color(0xFF4A90FF), size: 16),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
