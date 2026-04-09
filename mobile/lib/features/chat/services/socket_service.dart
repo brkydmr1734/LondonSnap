@@ -348,26 +348,91 @@ class ChatSocketService extends ChangeNotifier {
       return; // Already connected with same token
     }
 
+    // If socket exists with same token but disconnected, try reconnecting it
+    if (_socket != null && _currentToken == token && !_isConnected) {
+      // ignore: avoid_print
+      print('[SOCKET] Reconnecting existing socket to $_wsUrl');
+      _socket!.connect();
+      return;
+    }
+
     disconnect(); // Clean up any existing connection
 
     _currentToken = token;
 
-    if (AppConfig.isDev) debugPrint('[SOCKET] Connecting to $_wsUrl');
+    // ignore: avoid_print
+    print('[SOCKET] Connecting to $_wsUrl');
 
     _socket = IO.io(
       _wsUrl,
       IO.OptionBuilder()
-          .setTransports(['polling', 'websocket'])
+          .setTransports(['websocket', 'polling'])
           .setAuth({'token': token})
           .enableAutoConnect()
           .enableReconnection()
-          .setReconnectionAttempts(10)
-          .setReconnectionDelay(1000)
-          .setReconnectionDelayMax(10000)
+          .setReconnectionAttempts(15)
+          .setReconnectionDelay(500)
+          .setReconnectionDelayMax(5000)
           .build(),
     );
 
     _setupListeners();
+  }
+
+  /// Force reconnect: if socket exists, reconnect it; otherwise create new connection
+  Future<bool> forceReconnect() async {
+    // ignore: avoid_print
+    print('[SOCKET] Force reconnect requested (connected=$_isConnected, hasSocket=${_socket != null})');
+
+    if (_isConnected) return true;
+
+    // If we have a socket, try reconnecting it first
+    if (_socket != null) {
+      _socket!.connect();
+      // Wait up to 8 seconds for connection
+      for (int i = 0; i < 80; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        if (_isConnected) {
+          // ignore: avoid_print
+          print('[SOCKET] Force reconnect succeeded via existing socket');
+          return true;
+        }
+      }
+    }
+
+    // If that didn't work and we have a token, create fresh connection
+    if (_currentToken != null) {
+      disconnect();
+      // ignore: avoid_print
+      print('[SOCKET] Force reconnect: creating fresh connection');
+      _socket = IO.io(
+        _wsUrl,
+        IO.OptionBuilder()
+            .setTransports(['websocket', 'polling'])
+            .setAuth({'token': _currentToken!})
+            .enableAutoConnect()
+            .enableReconnection()
+            .setReconnectionAttempts(15)
+            .setReconnectionDelay(500)
+            .setReconnectionDelayMax(5000)
+            .build(),
+      );
+      _setupListeners();
+
+      // Wait up to 8 seconds for connection
+      for (int i = 0; i < 80; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        if (_isConnected) {
+          // ignore: avoid_print
+          print('[SOCKET] Force reconnect succeeded via fresh socket');
+          return true;
+        }
+      }
+    }
+
+    // ignore: avoid_print
+    print('[SOCKET] Force reconnect FAILED');
+    return false;
   }
 
   void _setupListeners() {
@@ -375,7 +440,8 @@ class ChatSocketService extends ChangeNotifier {
 
     _socket!.onConnect((_) {
       _isConnected = true;
-      if (AppConfig.isDev) debugPrint('[SOCKET] Connected');
+      // ignore: avoid_print
+      print('[SOCKET] Connected successfully');
       _eventController.add(SocketEvent(SocketEventType.connected));
       
       // Re-join active chat room if any
@@ -385,9 +451,10 @@ class ChatSocketService extends ChangeNotifier {
       notifyListeners();
     });
 
-    _socket!.onDisconnect((_) {
+    _socket!.onDisconnect((reason) {
       _isConnected = false;
-      if (AppConfig.isDev) debugPrint('[SOCKET] Disconnected');
+      // ignore: avoid_print
+      print('[SOCKET] Disconnected: $reason');
       _eventController.add(SocketEvent(SocketEventType.disconnected));
       
       // Clear online users on disconnect
@@ -397,12 +464,14 @@ class ChatSocketService extends ChangeNotifier {
     });
 
     _socket!.onConnectError((error) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Connect error: $error');
+      // ignore: avoid_print
+      print('[SOCKET] Connect error: $error');
       _eventController.add(SocketEvent(SocketEventType.error, error.toString()));
     });
 
     _socket!.onError((error) {
-      if (AppConfig.isDev) debugPrint('[SOCKET] Error: $error');
+      // ignore: avoid_print
+      print('[SOCKET] Error: $error');
       _eventController.add(SocketEvent(SocketEventType.error, error.toString()));
     });
 
@@ -893,7 +962,12 @@ class ChatSocketService extends ChangeNotifier {
 
   /// Initiate a call
   void initiateCall({required String targetUserId, required String callType}) {
-    _socket?.emit(SocketEvents.callInitiate, {
+    if (_socket == null || !_isConnected) {
+      // ignore: avoid_print
+      print('[SOCKET] Cannot initiate call: socket=${_socket != null ? 'exists' : 'null'}, connected=$_isConnected');
+      return;
+    }
+    _socket!.emit(SocketEvents.callInitiate, {
       'targetUserId': targetUserId,
       'callType': callType,
     });

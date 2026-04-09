@@ -300,6 +300,9 @@ class CallProvider extends ChangeNotifier {
 
     // Initiate call via socket
     try {
+      if (!_socketService.isConnected) {
+        _log('WARNING: Socket not connected when emitting call_initiate!');
+      }
       _socketService.initiateCall(
         targetUserId: targetUserId,
         callType: isVideo ? 'video' : 'voice',
@@ -307,7 +310,7 @@ class CallProvider extends ChangeNotifier {
       _log('Initiating ${isVideo ? 'video' : 'voice'} call to $targetUserName (socket: ${_socketService.isConnected})');
     } catch (e) {
       _log('ERROR emitting call_initiate: $e');
-      _errorMessage = 'Failed to initiate call';
+      _errorMessage = 'Failed to initiate call. Please check your connection.';
       notifyListeners();
       await _resetCallState();
     }

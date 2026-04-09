@@ -86,9 +86,13 @@ class ChatProvider extends ChangeNotifier {
       final token = await ApiService().getValidAccessToken();
       if (token != null) {
         _socket.connect(token);
+      } else {
+        // ignore: avoid_print
+        print('[CHAT] WebSocket connect skipped: no valid token available');
       }
     } catch (e) {
-      if (AppConfig.isDev) debugPrint('[CHAT] WebSocket connect error: $e');
+      // ignore: avoid_print
+      print('[CHAT] WebSocket connect error: $e');
     }
   }
 
@@ -109,6 +113,20 @@ class ChatProvider extends ChangeNotifier {
     if (!_socket.isConnected) {
       await _connectWebSocket();
     }
+  }
+
+  /// Force reconnect socket with retry logic. Returns true if connected.
+  Future<bool> forceReconnectSocket() async {
+    if (_socket.isConnected) return true;
+
+    // First try refreshing token and connecting
+    await _connectWebSocket();
+
+    // If still not connected, use force reconnect
+    if (!_socket.isConnected) {
+      return await _socket.forceReconnect();
+    }
+    return true;
   }
 
   void _onSocketUpdate() {

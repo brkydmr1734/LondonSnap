@@ -312,28 +312,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     // Ensure socket is connected before starting call
     if (!_chatProvider.isSocketConnected) {
       // ignore: avoid_print
-      print('[Call] Socket not connected, attempting reconnect...');
-      _chatProvider.reconnectSocket();
+      print('[Call] Socket not connected, attempting force reconnect...');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Connecting to server...')),
       );
-      // Wait for connection with timeout
-      bool connected = false;
-      for (int i = 0; i < 50; i++) {
-        await Future.delayed(const Duration(milliseconds: 100));
-        if (_chatProvider.isSocketConnected) {
-          connected = true;
-          break;
-        }
-      }
+
+      // Use force reconnect with built-in retry logic
+      final connected = await _chatProvider.forceReconnectSocket();
+
       if (!mounted) return;
       if (!connected) {
         // ignore: avoid_print
-        print('[Call] Socket connection FAILED after 5s timeout');
+        print('[Call] Socket connection FAILED after all retries');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Could not connect to server. Check your internet and try again.'),
+            content: Text('Could not connect to server. Please try again.'),
             backgroundColor: Colors.red,
           ),
         );

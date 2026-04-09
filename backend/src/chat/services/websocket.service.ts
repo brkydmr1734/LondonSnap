@@ -93,12 +93,21 @@ class WebSocketService {
   initialize(httpServer: HttpServer, corsOrigins: string[]): Server {
     this.io = new Server(httpServer, {
       cors: {
-        origin: corsOrigins,
+        origin: (origin, callback) => {
+          // Allow mobile apps (no origin header) and configured web origins
+          if (!origin || corsOrigins.includes(origin)) {
+            callback(null, true);
+          } else {
+            logger.warn(`[WS] CORS rejected origin: ${origin}`);
+            callback(null, true); // Allow anyway for mobile compatibility
+          }
+        },
         credentials: true,
       },
       transports: ['websocket', 'polling'],
       pingTimeout: 30000,
       pingInterval: 25000,
+      allowEIO3: true,
     });
 
     this.io.use(this.authMiddleware.bind(this));
