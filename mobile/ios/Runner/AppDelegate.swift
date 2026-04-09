@@ -6,6 +6,9 @@ import AVFoundation
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var audioPlayer: AVAudioPlayer?
   private var ringtoneChannel: FlutterMethodChannel?
+  private var watchdogTimer: Timer?
+  private var currentRingtonePath: String?
+  private var currentVolume: Float = 1.0
 
   override func application(
     _ application: UIApplication,
@@ -109,6 +112,15 @@ import AVFoundation
 
       let success = audioPlayer?.play() ?? false
       NSLog("[Ringtone-iOS] play() returned: %d, isPlaying=%d", success ? 1 : 0, audioPlayer?.isPlaying ?? false ? 1 : 0)
+
+      // Start watchdog: checks every 1s if player died unexpectedly and restarts it
+      currentRingtonePath = path
+      currentVolume = volume
+      watchdogTimer?.invalidate()
+      watchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        self?.checkAndRestartIfNeeded()
+      }
+
       result(nil)
     } catch {
       NSLog("[Ringtone-iOS] Play error: %@", error.localizedDescription)
@@ -151,12 +163,46 @@ import AVFoundation
   }
 
   private func stopAudio() {
+    watchdogTimer?.invalidate()
+    watchdogTimer = nil
+    currentRingtonePath = nil
     if audioPlayer != nil {
       NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
       NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
       audioPlayer?.stop()
       audioPlayer = nil
       NSLog("[Ringtone-iOS] Stopped")
+    }
+  }
+
+  /// Watchdog: if the player was killed by an audio session change, restart it
+  private func checkAndRestartIfNeeded() {
+    guard let path = currentRingtonePath else { return }
+
+    // If player exists and is playing, all good
+    if let player = audioPlayer, player.isPlaying { return }
+
+    NSLog("[Ringtone-iOS] Watchdog: player died, restarting...")
+
+    let url = URL(fileURLWithPath: path)
+    do {
+      let session = AVAudioSession.sharedInstance()
+      try session.setCategory(
+        .playAndRecord,
+        mode: .default,
+        options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+      )
+      try session.setActive(true)
+
+      audioPlayer = try AVAudioPlayer(contentsOf: url)
+      audioPlayer?.volume = currentVolume
+      audioPlayer?.numberOfLoops = -1
+      audioPlayer?.prepareToPlay()
+      try session.overrideOutputAudioPort(.speaker)
+      audioPlayer?.play()
+      NSLog("[Ringtone-iOS] Watchdog: restarted successfully")
+    } catch {
+      NSLog("[Ringtone-iOS] Watchdog restart failed: %@", error.localizedDescription)
     }
   }
 }
