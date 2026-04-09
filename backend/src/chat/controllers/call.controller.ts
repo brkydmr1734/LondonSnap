@@ -114,6 +114,8 @@ export class CallController {
           expiry,
         },
       });
+
+      logger.info(`[CALL] TURN credentials served: ${iceServers.length} servers, ttl=${ttl}s, user=${req.user.id.slice(0,8)}`);
     } catch (error) {
       next(error);
     }

@@ -87,7 +87,9 @@ class WebRTCService {
     _hasTurnCredentials = servers.any((s) =>
         s['urls']?.toString().startsWith('turn') == true ||
         s['urls']?.toString().startsWith('turns') == true);
-    _log('ICE servers updated: ${servers.length} servers, hasTURN=$_hasTurnCredentials');
+    // Redact credentials in logs
+    final serverSummary = servers.map((s) => s['urls']).toList();
+    _log('ICE servers updated: ${servers.length} servers, hasTURN=$_hasTurnCredentials, urls=$serverSummary');
   }
 
   /// Apply adaptive bitrate constraints based on connection quality
@@ -219,6 +221,7 @@ class WebRTCService {
   }
 
   /// Get user media (audio and optionally video)
+  /// Falls back to audio-only if video capture fails (graceful degradation)
   Future<void> _getUserMedia(bool isVideoCall) async {
     try {
       // If we already have a preview stream (from startLocalPreview), 
@@ -239,7 +242,21 @@ class WebRTCService {
             : false,
       };
 
-      _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+      try {
+        _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+      } catch (videoError) {
+        // Graceful degradation: if video fails, fall back to audio-only
+        if (isVideoCall) {
+          _log('WARNING: Video capture failed, falling back to audio-only: $videoError');
+          _localStream = await navigator.mediaDevices.getUserMedia({
+            'audio': true,
+            'video': false,
+          });
+          _isVideoEnabled = false;
+        } else {
+          rethrow;
+        }
+      }
 
       // Set default speaker mode
       // Video calls: speaker ON (like Snapchat/FaceTime)
@@ -264,8 +281,10 @@ class WebRTCService {
   /// Setup peer connection event listeners
   void _setupPeerConnectionListeners() {
     _peerConnection?.onIceCandidate = (candidate) {
-      _log('ICE candidate generated: ${candidate.candidate?.substring(0, (candidate.candidate?.length ?? 0).clamp(0, 50)) ?? 'null'}...');
-      onIceCandidate?.call(candidate);
+      if (candidate.candidate != null && candidate.candidate!.isNotEmpty) {
+        _log('ICE candidate: ${candidate.candidate!.substring(0, candidate.candidate!.length.clamp(0, 40))}...');
+        onIceCandidate?.call(candidate);
+      }
     };
 
     _peerConnection?.onIceConnectionState = (state) {
@@ -326,7 +345,7 @@ class WebRTCService {
   void startQualityMonitoring() {
     _statsTimer?.cancel();
     _prevBytesReceived = 0;
-    _statsTimer = Timer.periodic(const Duration(seconds: 3), (_) => _checkConnectionQuality());
+    _statsTimer = Timer.periodic(const Duration(seconds: 5), (_) => _checkConnectionQuality());
     _log('Quality monitoring started');
   }
 

@@ -34,6 +34,11 @@ const callTimeouts = new Map<string, NodeJS.Timeout>(); // callId -> timeout tim
 // Rate limiting for typing events
 const typingRateLimit = new Map<string, number>(); // key -> last emit timestamp
 
+// Rate limiting for call initiation (anti-spam)
+const callRateLimit = new Map<string, { count: number; firstAt: number }>(); // userId -> { count, firstAt }
+const CALL_RATE_LIMIT_WINDOW = 60_000; // 60-second window
+const CALL_RATE_LIMIT_MAX = 5; // max 5 call attempts per window
+
 // Event Types (matching iOS client)
 const EVENTS = {
   // Client -> Server
@@ -634,6 +639,24 @@ class WebSocketService {
         return;
       }
 
+      // Rate limit: prevent call spam
+      const now = Date.now();
+      const rateEntry = callRateLimit.get(callerId);
+      if (rateEntry) {
+        if (now - rateEntry.firstAt < CALL_RATE_LIMIT_WINDOW) {
+          if (rateEntry.count >= CALL_RATE_LIMIT_MAX) {
+            socket.emit(EVENTS.CALL_ERROR, { callId: null, error: 'Too many call attempts. Please wait.' });
+            logger.warn(`[CALL] Rate limited call from ${callerId} (${rateEntry.count} calls in ${Math.floor((now - rateEntry.firstAt) / 1000)}s)`);
+            return;
+          }
+          rateEntry.count++;
+        } else {
+          callRateLimit.set(callerId, { count: 1, firstAt: now });
+        }
+      } else {
+        callRateLimit.set(callerId, { count: 1, firstAt: now });
+      }
+
       // Block check: deny if either party has blocked the other
       const blockExists = await prisma.block.findFirst({
         where: {
@@ -681,14 +704,14 @@ class WebSocketService {
       // Generate unique call ID
       const callId = uuidv4();
 
-      // Store call in active calls
+      // Store call in active calls — use verified auth data (NOT client-supplied)
       const call: ActiveCall = {
         callerId,
         targetId: targetUserId,
         callType,
         startTime: new Date(),
-        callerName: socket.user.displayName,
-        callerAvatar: socket.user.avatarUrl ?? undefined,
+        callerName: socket.user.displayName,  // from JWT-verified DB lookup
+        callerAvatar: socket.user.avatarUrl ?? undefined, // from JWT-verified DB lookup
       };
       activeCalls.set(callId, call);
 
@@ -698,12 +721,12 @@ class WebSocketService {
       const isTargetOnline = this.isUserOnline(targetUserId);
 
       if (isTargetOnline) {
-        // Emit incoming call to target's socket(s)
+        // Emit incoming call to target — use server-verified user data (anti-spoofing)
         this.emitToUser(targetUserId, EVENTS.CALL_INCOMING, {
           callId,
           callerId,
-          callerName: socket.user.displayName,
-          callerAvatar: socket.user.avatarUrl,
+          callerName: socket.user.displayName,  // server-verified, not client input
+          callerAvatar: socket.user.avatarUrl,   // server-verified, not client input
           callType,
         });
       } else {
@@ -953,6 +976,7 @@ class WebSocketService {
 
       // Calculate call duration
       const duration = Math.floor((Date.now() - call.startTime.getTime()) / 1000);
+      const durationFormatted = `${Math.floor(duration / 60)}m ${duration % 60}s`;
 
       // Clear the timeout timer if exists
       const timeout = callTimeouts.get(callId);
@@ -983,7 +1007,7 @@ class WebSocketService {
         },
       }).catch((err: any) => logger.error('Failed to log completed call:', err));
 
-      logger.info(`[CALL] Call ended: callId=${callId}, duration=${duration}s`);
+      logger.info(`[CALL] Call ended: callId=${callId}, type=${call.callType}, duration=${durationFormatted}, caller=${call.callerId.slice(0,8)}, target=${call.targetId.slice(0,8)}`);
     } catch (error) {
       logger.error(`[CALL] Error in call_end handler:`, error);
       socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });
@@ -1003,6 +1027,13 @@ class WebSocketService {
 
       if (!callId || !sdp) {
         socket.emit(EVENTS.ERROR, { message: 'callId and sdp are required' });
+        return;
+      }
+
+      // Basic SDP validation — must have type and sdp string
+      if (!sdp.type || !sdp.sdp || typeof sdp.sdp !== 'string' || sdp.sdp.length < 50) {
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Invalid SDP format' });
+        logger.warn(`[CALL] Invalid SDP offer from ${userId}: type=${sdp.type}, len=${sdp.sdp?.length}`);
         return;
       }
 
@@ -1042,6 +1073,13 @@ class WebSocketService {
 
       if (!callId || !sdp) {
         socket.emit(EVENTS.ERROR, { message: 'callId and sdp are required' });
+        return;
+      }
+
+      // Basic SDP validation
+      if (!sdp.type || !sdp.sdp || typeof sdp.sdp !== 'string' || sdp.sdp.length < 50) {
+        socket.emit(EVENTS.CALL_ERROR, { callId, error: 'Invalid SDP format' });
+        logger.warn(`[CALL] Invalid SDP answer from ${userId}: type=${sdp.type}, len=${sdp.sdp?.length}`);
         return;
       }
 
@@ -1099,7 +1137,8 @@ class WebSocketService {
       const otherUserId = call.callerId === userId ? call.targetId : call.callerId;
       this.emitToUser(otherUserId, EVENTS.CALL_ICE_CANDIDATE, { callId, candidate });
 
-      logger.info(`[CALL] ICE candidate relayed: callId=${callId}`);
+      // Debug-level only (ICE candidates are high-frequency)
+      logger.debug?.(`[CALL] ICE candidate relayed: callId=${callId}`) ?? void 0;
     } catch (error) {
       logger.error(`[CALL] Error in call_ice_candidate handler:`, error);
       socket.emit(EVENTS.CALL_ERROR, { callId: data?.callId ?? null, error: 'Internal server error' });

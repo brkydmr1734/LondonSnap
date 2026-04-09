@@ -84,6 +84,8 @@ class CallProvider extends ChangeNotifier {
   String? _errorMessage;
 
   // Pending ICE candidates (received before remote description is set)
+  // NOTE: WebRTCService also has its own queue. This is the signaling-level queue
+  // for candidates arriving before WebRTC is even initialized.
   final List<RTCIceCandidate> _pendingCandidates = [];
   Timer? _disconnectTimer;
   Timer? _connectionTimeoutTimer;
@@ -167,6 +169,9 @@ class CallProvider extends ChangeNotifier {
 
     // Listen for network changes to trigger ICE restart during active calls
     _connectivityService.addListener(_onConnectivityChanged);
+
+    // Pre-fetch TURN credentials in background (faster call setup later)
+    prefetchTurnCredentials();
 
     _log('Initialized (socket connected: ${_socketService.isConnected})');
   }
@@ -793,36 +798,34 @@ class CallProvider extends ChangeNotifier {
     };
   }
 
-  /// Fetch TURN credentials with retry and caching
+  /// Fetch TURN credentials with exponential backoff and caching
   Future<void> _fetchTurnCredentials() async {
     // Check cache first
     if (_cachedTurnServers != null && _turnCacheTimestamp != null) {
       final age = DateTime.now().difference(_turnCacheTimestamp!);
       if (age < _turnCacheTtl) {
         _webrtcService.setIceServers(_cachedTurnServers!);
-        _log('Using cached TURN credentials (age=${age.inMinutes}m, servers=${_cachedTurnServers!.length}, hasTURN=${_webrtcService.hasTurnCredentials})');
+        _log('Using cached TURN credentials (age=${age.inMinutes}m)');
         return;
       }
-      _log('TURN cache expired (age=${age.inMinutes}m), fetching fresh credentials');
+      _log('TURN cache expired (age=${age.inMinutes}m), fetching fresh');
     }
 
-    // Attempt 1
-    try {
-      await _doFetchTurn();
-      return;
-    } catch (e) {
-      _log('WARNING: TURN credential fetch attempt 1 failed: $e');
+    // Exponential backoff: 1s, 2s
+    const retries = 2;
+    for (int attempt = 1; attempt <= retries; attempt++) {
+      try {
+        await _doFetchTurn();
+        return;
+      } catch (e) {
+        _log('WARNING: TURN fetch attempt $attempt/$retries failed: $e');
+        if (attempt < retries) {
+          await Future.delayed(Duration(seconds: attempt)); // 1s, 2s
+        }
+      }
     }
 
-    // Retry after 1 second
-    await Future.delayed(const Duration(seconds: 1));
-    try {
-      await _doFetchTurn();
-      return;
-    } catch (e) {
-      _log('WARNING: TURN fetch failed after 2 attempts, falling back to STUN-only. Calls may fail on mobile networks! Error: $e');
-      // Don't block the call — proceed with STUN-only
-    }
+    _log('WARNING: All TURN fetch attempts failed, falling back to STUN-only');
   }
 
   /// Actually fetch TURN credentials from backend
@@ -837,7 +840,22 @@ class CallProvider extends ChangeNotifier {
     // Cache
     _cachedTurnServers = servers;
     _turnCacheTimestamp = DateTime.now();
-    _log('Fetched TURN credentials: ${servers.length} ICE servers (hasTURN=${_webrtcService.hasTurnCredentials})');
+    _log('Fetched TURN credentials: ${servers.length} ICE servers');
+  }
+
+  /// Pre-fetch TURN credentials so they're cached when a call starts.
+  /// Call this during app initialization or when the user opens chat.
+  Future<void> prefetchTurnCredentials() async {
+    if (_cachedTurnServers != null && _turnCacheTimestamp != null) {
+      final age = DateTime.now().difference(_turnCacheTimestamp!);
+      if (age < _turnCacheTtl) return; // still valid
+    }
+    try {
+      await _doFetchTurn();
+      _log('TURN credentials pre-fetched successfully');
+    } catch (e) {
+      _log('TURN pre-fetch failed (non-critical): $e');
+    }
   }
 
   // ---------------------------------------------------------------------------
