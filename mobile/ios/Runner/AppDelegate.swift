@@ -1,13 +1,17 @@
 import Flutter
 import UIKit
+import AVFoundation
 import AudioToolbox
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var ringtoneChannel: FlutterMethodChannel?
 
-  // AudioToolbox system sound — immune to AVAudioSession changes from WebRTC
-  private var systemSoundID: SystemSoundID = 0
+  // Brute-force ringtone: Timer recreates player + forces speaker every cycle
+  private var ringtoneTimer: Timer?
+  private var audioPlayer: AVAudioPlayer?
+  private var ringtonePath: String?
+  private var ringtoneVolume: Float = 1.0
   private var isRinging: Bool = false
 
   override func application(
@@ -30,16 +34,16 @@ import AudioToolbox
       ringtoneChannel?.setMethodCallHandler { [weak self] call, result in
         self?.handleRingtone(call: call, result: result)
       }
-      NSLog("[Ringtone-iOS] MethodChannel registered via AudioToolbox engine")
+      NSLog("[Ringtone] MethodChannel registered")
     } else {
-      NSLog("[Ringtone-iOS] ERROR: Could not get registrar for RingtonePlugin")
+      NSLog("[Ringtone] ERROR: registrar nil")
     }
   }
 
-  // MARK: - MethodChannel Handler
+  // MARK: - MethodChannel
 
   private func handleRingtone(call: FlutterMethodCall, result: @escaping FlutterResult) {
-    NSLog("[Ringtone-iOS] method: %@", call.method)
+    NSLog("[Ringtone] method: %@", call.method)
     switch call.method {
     case "play":
       guard let args = call.arguments as? [String: Any],
@@ -47,11 +51,12 @@ import AudioToolbox
         result(FlutterError(code: "ARGS", message: "Missing path", details: nil))
         return
       }
-      NSLog("[Ringtone-iOS] play: %@", path)
-      playSystemSound(path: path, result: result)
+      let volume = Float(args["volume"] as? Double ?? 1.0)
+      startRinging(path: path, volume: volume)
+      result(nil)
 
     case "stop":
-      stopSystemSound()
+      stopRinging()
       result(nil)
 
     default:
@@ -59,55 +64,90 @@ import AudioToolbox
     }
   }
 
-  // MARK: - AudioToolbox System Sound (immune to AVAudioSession / WebRTC)
+  // MARK: - Brute-Force Ringtone Engine
+  //
+  // Strategy: A repeating Timer fires every N seconds.
+  // Each tick:
+  //   1. Kills the old AVAudioPlayer (if any)
+  //   2. Reconfigures AVAudioSession (.playAndRecord + .mixWithOthers)
+  //   3. Forces speaker output
+  //   4. Creates a FRESH AVAudioPlayer and plays
+  //   5. Triggers vibration
+  //
+  // This guarantees continuous playback because:
+  //   - Even if WebRTC kills the player by reconfiguring the audio session,
+  //     the next Timer tick creates a brand new player with forced speaker.
+  //   - No reliance on interruption notifications, completion callbacks,
+  //     or audio session observer patterns that WebRTC can silently bypass.
 
-  private func playSystemSound(path: String, result: @escaping FlutterResult) {
-    stopSystemSound()
+  private func startRinging(path: String, volume: Float) {
+    stopRinging()
 
     guard FileManager.default.fileExists(atPath: path) else {
-      NSLog("[Ringtone-iOS] ERROR: File not found: %@", path)
-      result(FlutterError(code: "FILE", message: "Not found: \(path)", details: nil))
+      NSLog("[Ringtone] ERROR: file not found: %@", path)
       return
     }
 
-    let url = URL(fileURLWithPath: path) as CFURL
-    let status = AudioServicesCreateSystemSoundID(url, &systemSoundID)
-
-    guard status == kAudioServicesNoError else {
-      NSLog("[Ringtone-iOS] ERROR: AudioServicesCreateSystemSoundID failed: %d", status)
-      result(FlutterError(code: "CREATE", message: "SystemSound create failed: \(status)", details: nil))
-      return
-    }
-
+    ringtonePath = path
+    ringtoneVolume = volume
     isRinging = true
 
-    // Set up completion callback to loop the sound
-    let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-    AudioServicesAddSystemSoundCompletion(systemSoundID, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue, { (ssID, clientData) in
-      guard let clientData = clientData else { return }
-      let appDelegate = Unmanaged<AppDelegate>.fromOpaque(clientData).takeUnretainedValue()
-      if appDelegate.isRinging {
-        NSLog("[Ringtone-iOS] Loop: replaying system sound")
-        AudioServicesPlayAlertSound(ssID)
-      }
-    }, selfPtr)
+    // Play immediately
+    playOneCycle()
 
-    // Play first time (AlertSound = sound + vibration, respects silent switch)
-    AudioServicesPlayAlertSound(systemSoundID)
-    NSLog("[Ringtone-iOS] System sound playing, ID=%d", systemSoundID)
-    result(nil)
+    // Then replay every 4.5 seconds (our WAV is ~5s: 2s ring + 3s silence)
+    // Slightly less than WAV duration ensures continuous coverage
+    ringtoneTimer = Timer.scheduledTimer(withTimeInterval: 4.5, repeats: true) { [weak self] _ in
+      self?.playOneCycle()
+    }
+
+    NSLog("[Ringtone] Started ringing loop")
   }
 
-  private func stopSystemSound() {
-    guard isRinging || systemSoundID != 0 else { return }
+  private func playOneCycle() {
+    guard isRinging, let path = ringtonePath else { return }
 
-    isRinging = false
+    // Kill existing player
+    audioPlayer?.stop()
+    audioPlayer = nil
 
-    if systemSoundID != 0 {
-      AudioServicesRemoveSystemSoundCompletion(systemSoundID)
-      AudioServicesDisposeSystemSoundID(systemSoundID)
-      NSLog("[Ringtone-iOS] System sound stopped, disposed ID=%d", systemSoundID)
-      systemSoundID = 0
+    do {
+      // Reconfigure audio session every cycle (WebRTC may have changed it)
+      let session = AVAudioSession.sharedInstance()
+      try session.setCategory(
+        .playAndRecord,
+        mode: .voiceChat,              // Match WebRTC's mode exactly
+        options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+      )
+      try session.setActive(true)
+      try session.overrideOutputAudioPort(.speaker)
+
+      // Create fresh player
+      let url = URL(fileURLWithPath: path)
+      audioPlayer = try AVAudioPlayer(contentsOf: url)
+      audioPlayer?.volume = ringtoneVolume
+      audioPlayer?.numberOfLoops = 0  // Single play (Timer handles looping)
+      audioPlayer?.prepareToPlay()
+      audioPlayer?.play()
+
+      // Vibrate
+      AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+
+      NSLog("[Ringtone] Cycle played, isPlaying=%d", audioPlayer?.isPlaying == true ? 1 : 0)
+    } catch {
+      NSLog("[Ringtone] Cycle play error: %@", error.localizedDescription)
+      // Still vibrate even if audio fails
+      AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
     }
+  }
+
+  private func stopRinging() {
+    isRinging = false
+    ringtoneTimer?.invalidate()
+    ringtoneTimer = nil
+    ringtonePath = nil
+    audioPlayer?.stop()
+    audioPlayer = nil
+    NSLog("[Ringtone] Stopped")
   }
 }
