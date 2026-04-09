@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -30,58 +31,79 @@ class RingtoneService {
   // PUBLIC API
   // ---------------------------------------------------------------------------
 
-  /// Play incoming call ringtone (looping, higher volume).
+  /// Force audio output to speaker (not earpiece).
+  /// On iOS, WebRTC may have set audio session to earpiece mode.
+  Future<void> _forceSpeaker() async {
+    try {
+      await Helper.setSpeakerphoneOn(true);
+      debugPrint('[Ringtone] Forced speaker ON');
+    } catch (e) {
+      debugPrint('[Ringtone] setSpeakerphoneOn error (non-fatal): $e');
+    }
+  }
+
+  /// Play incoming call ringtone (looping, LOUD).
   Future<void> playIncomingRingtone() async {
     await stop();
     _isPlaying = true;
 
     try {
+      // Delete old cached file to pick up new amplitude
+      _incomingRingtonePath = null;
+
       final path = await _getOrCreateWav(
-        name: 'incoming_ringtone',
+        name: 'incoming_ringtone_v3',
         cachedPath: _incomingRingtonePath,
         onCached: (p) => _incomingRingtonePath = p,
-        ringMs: 1500,
-        silenceMs: 2500,
-        totalMs: 30000,
+        ringMs: 2000,
+        silenceMs: 2000,
+        totalMs: 60000, // 60 seconds of ringing
         freqs: [440.0, 480.0],
-        amplitude: 12000,
+        amplitude: 28000, // near-max 16-bit amplitude
       );
+
+      await _forceSpeaker();
 
       _player = AudioPlayer();
       await _player!.setFilePath(path);
       await _player!.setLoopMode(LoopMode.all);
       await _player!.setVolume(1.0);
-      _player!.play();
-      debugPrint('[Ringtone] Incoming ringtone PLAYING from $path');
+      await _player!.play();
+      debugPrint('[Ringtone] Incoming ringtone PLAYING LOUD from $path');
     } catch (e, s) {
       debugPrint('[Ringtone] Incoming ringtone error: $e\n$s');
       _startHapticPattern();
     }
   }
 
-  /// Play outgoing call ringback tone (ring…pause…ring, moderate volume).
+  /// Play outgoing call ringback tone (ring…pause…ring, LOUD through speaker).
   Future<void> playOutgoingRingback() async {
     await stop();
     _isPlaying = true;
 
     try {
+      // Delete old cached file to pick up new amplitude
+      _outgoingRingbackPath = null;
+
       final path = await _getOrCreateWav(
-        name: 'outgoing_ringback',
+        name: 'outgoing_ringback_v3',
         cachedPath: _outgoingRingbackPath,
         onCached: (p) => _outgoingRingbackPath = p,
-        ringMs: 1200,
+        ringMs: 2000,
         silenceMs: 3000,
-        totalMs: 60000,
+        totalMs: 60000, // 60 seconds until answered/timeout
         freqs: [440.0, 480.0],
-        amplitude: 10000,
+        amplitude: 28000, // near-max 16-bit amplitude
       );
+
+      await _forceSpeaker();
 
       _player = AudioPlayer();
       await _player!.setFilePath(path);
       await _player!.setLoopMode(LoopMode.all);
-      await _player!.setVolume(0.7);
-      _player!.play();
-      debugPrint('[Ringtone] Outgoing ringback PLAYING from $path');
+      await _player!.setVolume(1.0);
+      await _player!.play();
+      debugPrint('[Ringtone] Outgoing ringback PLAYING LOUD from $path');
     } catch (e, s) {
       debugPrint('[Ringtone] Outgoing ringback error: $e\n$s');
       _startHapticPattern();
