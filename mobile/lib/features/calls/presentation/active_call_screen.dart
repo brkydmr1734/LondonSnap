@@ -484,7 +484,8 @@ class _ActiveCallScreenState extends State<ActiveCallScreen>
 
   Widget _buildLocalVideoPiP(MediaQueryData mq) {
     final localStream = _callProvider.webrtcService.localStream;
-    final hasLocal = localStream != null && _callProvider.isVideoEnabled;
+    // Show local video PiP whenever we have a local stream (including preview during ringing)
+    final hasLocal = localStream != null;
 
     if (!hasLocal) return const SizedBox.shrink();
 

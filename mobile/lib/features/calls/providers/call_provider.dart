@@ -327,7 +327,18 @@ class CallProvider extends ChangeNotifier {
     notifyListeners();
 
     // Start outgoing ringback tone
-    _ringtoneService.playOutgoingRingback();
+    _ringtoneService.playOutgoingRingback().catchError((e) {
+      _log('WARNING: ringback tone failed: $e');
+    });
+
+    // Start local camera preview for video calls (so user sees themselves while ringing)
+    if (isVideo) {
+      _webrtcService.startLocalPreview().then((_) {
+        notifyListeners(); // trigger UI rebuild to show local video
+      }).catchError((e) {
+        _log('WARNING: local preview failed: $e');
+      });
+    }
 
     // Initiate call via socket
     try {
@@ -407,7 +418,9 @@ class CallProvider extends ChangeNotifier {
     _log('Incoming call from ${event.callerName} (callId=${event.callId}, type=${event.callType})');
 
     // Play incoming ringtone (in-app; CallKit plays its own natively)
-    _ringtoneService.playIncomingRingtone();
+    _ringtoneService.playIncomingRingtone().catchError((e) {
+      _log('WARNING: incoming ringtone failed: $e');
+    });
 
     notifyListeners();
   }

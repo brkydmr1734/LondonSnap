@@ -178,9 +178,56 @@ class WebRTCService {
     }
   }
 
+  /// Start local camera preview only (no peer connection).
+  /// Used to show the user's own camera while the call is ringing.
+  /// The stream will be reused when full WebRTC is initialized via [initialize].
+  Future<void> startLocalPreview() async {
+    if (_localStream != null) return; // already have a stream
+    _disposed = false;
+    try {
+      final constraints = {
+        'audio': false, // no audio needed for preview
+        'video': {
+          'facingMode': 'user',
+          'width': {'ideal': 1280},
+          'height': {'ideal': 720},
+        },
+      };
+      _localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      _isFrontCamera = true;
+      _log('Local camera preview started (tracks=${_localStream?.getTracks().length})');
+    } catch (e) {
+      _log('startLocalPreview ERROR: $e');
+    }
+  }
+
+  /// Stop local preview stream (if full init hasn't happened yet).
+  Future<void> stopLocalPreview() async {
+    if (_peerConnection != null) return; // full WebRTC active, don't stop
+    await _disposeLocalStream();
+    _log('Local preview stopped');
+  }
+
+  Future<void> _disposeLocalStream() async {
+    if (_localStream != null) {
+      for (final track in _localStream!.getTracks()) {
+        await track.stop();
+      }
+      await _localStream!.dispose();
+      _localStream = null;
+    }
+  }
+
   /// Get user media (audio and optionally video)
   Future<void> _getUserMedia(bool isVideoCall) async {
     try {
+      // If we already have a preview stream (from startLocalPreview), 
+      // stop it and get a fresh one with audio
+      if (_localStream != null) {
+        _log('Replacing preview-only stream with full audio+video stream');
+        await _disposeLocalStream();
+      }
+
       final mediaConstraints = {
         'audio': true,
         'video': isVideoCall
