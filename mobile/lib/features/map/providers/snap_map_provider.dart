@@ -156,16 +156,33 @@ class SnapMapNotifier extends StateNotifier<SnapMapState> {
 
   void toggleGhostMode() async {
     final newGhost = !state.ghostMode;
-    state = state.copyWith(ghostMode: newGhost);
+    try {
+      await setGhostMode(newGhost);
+    } catch (_) {
+      // Already reverted inside setGhostMode
+    }
+  }
+
+  /// Set ghost mode to a specific value (used by settings screen and map toggle)
+  Future<void> setGhostMode(bool enabled) async {
+    final wasGhost = state.ghostMode;
+    if (wasGhost == enabled) return;
+    state = state.copyWith(ghostMode: enabled);
     try {
       await _api.updatePrivacySettings({
-        'whoCanSeeLocation': newGhost ? 'NOBODY' : 'FRIENDS',
-        'showInNearby': !newGhost,
+        'whoCanSeeLocation': enabled ? 'NOBODY' : 'FRIENDS',
+        'showInNearby': !enabled,
       });
     } catch (_) {
       // Revert on failure
-      state = state.copyWith(ghostMode: !newGhost);
+      state = state.copyWith(ghostMode: wasGhost);
+      rethrow;
     }
+  }
+
+  /// Refresh ghost mode state from backend (e.g. after settings change)
+  Future<void> refreshGhostMode() async {
+    await _loadGhostMode();
   }
 
   Future<void> _requestLocationAndLoad() async {

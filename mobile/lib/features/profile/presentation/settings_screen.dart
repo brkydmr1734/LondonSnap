@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:dio/dio.dart';
 import 'package:londonsnaps/core/theme/app_theme.dart';
 import 'package:londonsnaps/features/auth/providers/auth_provider.dart';
 import 'package:londonsnaps/core/api/api_service.dart';
+import 'package:londonsnaps/features/map/providers/snap_map_provider.dart';
 
-class SettingsScreen extends StatefulWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final AuthProvider _authProvider = AuthProvider();
   final ApiService _api = ApiService();
 
@@ -319,12 +321,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
             value: _locationSharing,
             activeThumbColor: AppTheme.primaryColor,
-            onChanged: (v) {
+            onChanged: (v) async {
               setState(() {
                 _locationSharing = v;
                 if (v) _ghostMode = false;
               });
-              _updatePrivacy({'whoCanSeeLocation': v ? 'FRIENDS' : 'NOBODY', 'showInNearby': v});
+              try {
+                await ref.read(snapMapProvider.notifier).setGhostMode(!v);
+              } catch (_) {
+                // Revert local state on failure
+                if (mounted) {
+                  setState(() {
+                    _locationSharing = !v;
+                    _ghostMode = !v ? false : true;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Failed to save setting'), backgroundColor: AppTheme.errorColor),
+                  );
+                }
+              }
             },
           ),
           SwitchListTile(
@@ -334,12 +349,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
             value: _ghostMode,
             activeThumbColor: AppTheme.primaryColor,
-            onChanged: (v) {
+            onChanged: (v) async {
               setState(() {
                 _ghostMode = v;
                 if (v) _locationSharing = false;
               });
-              _updatePrivacy({'whoCanSeeLocation': v ? 'NOBODY' : 'FRIENDS', 'showInNearby': !v});
+              try {
+                await ref.read(snapMapProvider.notifier).setGhostMode(v);
+              } catch (_) {
+                // Revert local state on failure
+                if (mounted) {
+                  setState(() {
+                    _ghostMode = !v;
+                    if (!v) _locationSharing = true;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Failed to save setting'), backgroundColor: AppTheme.errorColor),
+                  );
+                }
+              }
             },
           ),
           SwitchListTile(
