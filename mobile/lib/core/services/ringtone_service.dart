@@ -101,14 +101,20 @@ class RingtoneService {
 
   Future<void> _playNative(String path, {required bool loop, required double volume}) async {
     try {
-      await _channel.invokeMethod('play', {
+      final result = await _channel.invokeMethod('play', {
         'path': path,
         'loop': loop,
         'volume': volume,
       });
+      debugPrint('[Ringtone] Native play invoked, result=$result');
     } on MissingPluginException {
-      // Native side not implemented yet, fall back to platform sound
-      debugPrint('[Ringtone] Native channel not available, using system fallback');
+      debugPrint('[Ringtone] MissingPluginException - native channel NOT registered, using system fallback');
+      _startSystemSoundLoop();
+    } on PlatformException catch (e) {
+      debugPrint('[Ringtone] PlatformException: ${e.code} ${e.message}');
+      _startSystemSoundLoop();
+    } catch (e) {
+      debugPrint('[Ringtone] Unexpected play error: $e');
       _startSystemSoundLoop();
     }
   }

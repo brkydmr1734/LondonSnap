@@ -5,6 +5,7 @@ import AVFoundation
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var audioPlayer: AVAudioPlayer?
+  private var ringtoneChannel: FlutterMethodChannel?
 
   override func application(
     _ application: UIApplication,
@@ -14,38 +15,42 @@ import AVFoundation
     UNUserNotificationCenter.current().delegate = self
     application.registerForRemoteNotifications()
 
-    // Setup ringtone MethodChannel
-    let controller = window?.rootViewController as? FlutterViewController
-    if let controller = controller {
-      let channel = FlutterMethodChannel(
-        name: "com.londonsnaps.ringtone",
-        binaryMessenger: controller.binaryMessenger
-      )
-      channel.setMethodCallHandler { [weak self] call, result in
-        self?.handleRingtone(call: call, result: result)
-      }
-    }
-
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    // Register ringtone MethodChannel using the engine's plugin registry
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "RingtonePlugin") {
+      ringtoneChannel = FlutterMethodChannel(
+        name: "com.londonsnaps.ringtone",
+        binaryMessenger: registrar.messenger()
+      )
+      ringtoneChannel?.setMethodCallHandler { [weak self] call, result in
+        self?.handleRingtone(call: call, result: result)
+      }
+      NSLog("[Ringtone-iOS] MethodChannel registered successfully")
+    } else {
+      NSLog("[Ringtone-iOS] ERROR: Could not get registrar for RingtonePlugin")
+    }
   }
 
   // MARK: - Ringtone Playback via AVAudioPlayer
 
   private func handleRingtone(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    NSLog("[Ringtone-iOS] Received method call: %@", call.method)
     switch call.method {
     case "play":
       guard let args = call.arguments as? [String: Any],
             let path = args["path"] as? String else {
+        NSLog("[Ringtone-iOS] ERROR: Missing path argument")
         result(FlutterError(code: "ARGS", message: "Missing path", details: nil))
         return
       }
       let loop = args["loop"] as? Bool ?? true
       let volume = args["volume"] as? Double ?? 1.0
-
+      NSLog("[Ringtone-iOS] play: path=%@, loop=%d, vol=%.1f", path, loop ? 1 : 0, volume)
       playAudio(path: path, loop: loop, volume: Float(volume), result: result)
 
     case "stop":
@@ -62,13 +67,13 @@ import AVFoundation
 
     let url = URL(fileURLWithPath: path)
     guard FileManager.default.fileExists(atPath: path) else {
-      result(FlutterError(code: "FILE", message: "WAV file not found: \(path)", details: nil))
+      NSLog("[Ringtone-iOS] ERROR: File not found: %@", path)
+      result(FlutterError(code: "FILE", message: "WAV not found: \(path)", details: nil))
       return
     }
 
     do {
-      // Configure audio session for playback through speaker
-      // Use .playAndRecord with .defaultToSpeaker so it coexists with WebRTC
+      // Configure audio session - .playAndRecord coexists with WebRTC
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(
         .playAndRecord,
@@ -79,24 +84,26 @@ import AVFoundation
 
       audioPlayer = try AVAudioPlayer(contentsOf: url)
       audioPlayer?.volume = volume
-      audioPlayer?.numberOfLoops = loop ? -1 : 0 // -1 = infinite loop
+      audioPlayer?.numberOfLoops = loop ? -1 : 0
       audioPlayer?.prepareToPlay()
 
-      // Force output to speaker
+      // Force speaker output
       try session.overrideOutputAudioPort(.speaker)
 
-      audioPlayer?.play()
-      NSLog("[Ringtone-iOS] Playing: \(path), loop=\(loop), volume=\(volume)")
+      let success = audioPlayer?.play() ?? false
+      NSLog("[Ringtone-iOS] play() returned: %d, isPlaying=%d", success ? 1 : 0, audioPlayer?.isPlaying ?? false ? 1 : 0)
       result(nil)
     } catch {
-      NSLog("[Ringtone-iOS] Play error: \(error)")
+      NSLog("[Ringtone-iOS] Play error: %@", error.localizedDescription)
       result(FlutterError(code: "PLAY", message: error.localizedDescription, details: nil))
     }
   }
 
   private func stopAudio() {
-    audioPlayer?.stop()
-    audioPlayer = nil
-    NSLog("[Ringtone-iOS] Stopped")
+    if audioPlayer != nil {
+      audioPlayer?.stop()
+      audioPlayer = nil
+      NSLog("[Ringtone-iOS] Stopped")
+    }
   }
 }
